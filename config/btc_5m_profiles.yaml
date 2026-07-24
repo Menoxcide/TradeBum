@@ -1,0 +1,72 @@
+# Same shape as the scaffolding doc's config/btc_5m_profiles.yaml, plus a
+# few fields the backtest harness needs that weren't in the original (all
+# marked NEW-BACKTEST below). Values are starting points, not conclusions --
+# everything here should get re-tuned against real data via run_backtest.py.
+
+profiles:
+  conservative:
+    total_allocation_usdc: 1000
+    max_position_pct: 0.05
+    daily_loss_limit_pct: 0.10
+    max_trades_per_day: 5
+
+    min_btc_move_usd: 70
+    min_volume_percentile: 60
+    min_realized_vol_5m: 0.0        # NOTE: doc used 0.0015 as a *fraction*;
+                                     # this harness's atr_5m is in raw USD,
+                                     # so recalibrate this threshold once you
+                                     # see real ATR magnitudes from your data
+
+    signal_weights:
+      price_momentum: 25
+      orderbook_imbalance: 20
+      volume_profile: 20
+      volatility_regime: 15
+      funding_rate: 10
+      skew_edge: 10
+
+    min_confluence_score: 65
+
+    kelly_fraction: 0.25
+    min_trades_for_kelly: 50        # NEW-BACKTEST: small-sample guard, see README
+    fallback_pct: 0.01              # NEW-BACKTEST: size used before min_trades_for_kelly is reached
+
+    min_book_depth_usdc: 500
+
+    taker_fee: 0.0                  # NEW-BACKTEST: verify against current Polymarket fee schedule
+    assumed_polymarket_spread: 0.02 # NEW-BACKTEST: placeholder -- replace with real historical
+                                     # Polymarket YES/NO book spread if you have it (this is NOT
+                                     # the same order book as orderbook_imbalance, see README)
+    slippage_buffer: 0.005
+    fallback_fixed_pct: 0.01        # NEW-BACKTEST: fixed size used by the naive_momentum/coinflip baselines
+
+  aggressive:
+    total_allocation_usdc: 5000
+    max_position_pct: 0.07
+    daily_loss_limit_pct: 0.12
+    max_trades_per_day: 10
+
+    min_btc_move_usd: 70
+    min_volume_percentile: 50
+    min_realized_vol_5m: 0.0
+
+    signal_weights:
+      price_momentum: 25
+      orderbook_imbalance: 20
+      volume_profile: 20
+      volatility_regime: 15
+      funding_rate: 10
+      skew_edge: 10
+
+    min_confluence_score: 55
+
+    kelly_fraction: 0.33
+    min_trades_for_kelly: 50
+    fallback_pct: 0.01
+
+    min_book_depth_usdc: 500
+
+    taker_fee: 0.0
+    assumed_polymarket_spread: 0.02
+    slippage_buffer: 0.005
+    fallback_fixed_pct: 0.01

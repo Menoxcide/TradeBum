@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# real market data + run outputs: reproducible via scripts/, too big to track
+data/
+report*.json
