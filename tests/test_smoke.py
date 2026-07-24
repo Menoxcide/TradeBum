@@ -76,6 +76,40 @@ def test_no_lookahead_in_bars_as_of():
     assert all(b.timestamp_ms <= mid_ts for b in bars), "bars_as_of leaked a future bar"
 
 
+def test_bars_as_of_excludes_the_still_forming_bar():
+    """Regression test for a look-ahead bug the check above does NOT catch.
+
+    A bar is timestamped at its OPEN but its `close` is the price one whole
+    interval later. So the bar starting exactly at decision_ts passes a
+    `timestamp <= decision_ts` test while carrying a price from the future.
+    On 5-second synthetic bars that leak is easy to miss; on the real
+    1-minute bars this harness now runs on, it is 60 seconds of unknowable
+    price on a 300-second window -- enough to manufacture an edge out of
+    nothing. bars_as_of must return only bars that had CLOSED by ts."""
+    provider = _provider(n_windows=200)
+    ts = provider.bars[len(provider.bars) // 2].timestamp_ms
+    returned = provider.bars_as_of(ts, lookback=1000)
+    assert all(b.timestamp_ms + provider.bar_duration_ms <= ts for b in returned), (
+        "bars_as_of returned a bar that had not finished forming at the query time -- "
+        "its close is future information"
+    )
+    assert ts not in [b.timestamp_ms for b in returned], (
+        "the bar opening exactly at the query time is still in-progress and must be excluded"
+    )
+    assert returned, "excluding in-progress bars should not empty the history"
+
+
+def test_resolved_outcome_overrides_price_derived_outcome():
+    """The market settles on Chainlink, the signals read Binance. When the
+    real resolution is known it must win, including where the two disagree."""
+    from src.data.schema import ResolvedWindow
+    disagreeing = ResolvedWindow(0, 300_000, open_price=100.0, close_price=101.0,
+                                 resolved_outcome="DOWN")
+    assert disagreeing.outcome == "DOWN", "real resolution must override the price-derived guess"
+    unchanged = ResolvedWindow(0, 300_000, open_price=100.0, close_price=100.0)
+    assert unchanged.outcome == "UP", "an unchanged window resolves UP ('greater than or equal')"
+
+
 def test_synthetic_data_shows_no_confident_edge():
     """The self-check described in synthetic.py's docstring. IMPORTANT: this
     checks MEAN PNL, not win rate. Win rate is the wrong metric here -- the
