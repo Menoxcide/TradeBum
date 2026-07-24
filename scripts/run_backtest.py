@@ -74,7 +74,8 @@ def run_sensitivity(provider, config: dict, n_perturbations: int = 6, seed: int 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", default="conservative", choices=["conservative", "aggressive"])
+    ap.add_argument("--profile", default="conservative",
+                    choices=["conservative", "aggressive", "research"])
     ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config" / "btc_5m_profiles.yaml"))
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--synthetic", action="store_true", help="run the fake-data smoke test")
@@ -82,6 +83,9 @@ def main():
     ap.add_argument("--n-windows", type=int, default=3000, help="synthetic dataset size (windows)")
     ap.add_argument("--sensitivity", action="store_true", help="also run weight sensitivity analysis")
     ap.add_argument("--output", default=None, help="write full JSON report here")
+    ap.add_argument("--trades-output", default=None,
+                    help="write the per-trade log (one JSON object per line) here, for "
+                         "scripts/analyze_calibration.py and any other post-hoc analysis")
     args = ap.parse_args()
 
     config = load_config(args.config, args.profile)
@@ -111,6 +115,16 @@ def main():
     print("\n=== skip reasons (confluence strategy) ===")
     for reason, count in sorted(results["confluence"].skipped_reasons.items(), key=lambda x: -x[1]):
         print(f"  {reason}: {count}")
+
+    if args.trades_output:
+        out_path = Path(args.trades_output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w") as f:
+            for strategy, res in results.items():
+                for t in res.trades:
+                    f.write(json.dumps({"strategy": strategy, **t}) + "\n")
+        total = sum(len(r.trades) for r in results.values())
+        print(f"\nWrote {total} trade records -> {out_path}")
 
     if args.sensitivity:
         run_sensitivity(provider, config)

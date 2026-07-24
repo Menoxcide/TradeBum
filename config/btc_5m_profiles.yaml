@@ -40,6 +40,48 @@ profiles:
     slippage_buffer: 0.005
     fallback_fixed_pct: 0.01        # NEW-BACKTEST: fixed size used by the naive_momentum/coinflip baselines
 
+  # MEASUREMENT ONLY -- not a trading profile, never run this live.
+  #
+  # Identical signal gates to `conservative`, but with the *capital* limits
+  # (max trades/day, daily loss halt) lifted. Those limits exist to control
+  # risk, not to select signals, and on a 114-day sample they cap the
+  # backtest at 5 trades/day = ~570 trades, which is barely enough to
+  # distinguish a small edge from zero. Worse, taking only the first 5
+  # qualifying windows each day biases the sample toward early-UTC hours.
+  # This profile answers "is there edge in the signal" with every qualifying
+  # window included; `conservative` answers "what would I actually have
+  # traded". Read them as different questions.
+  research:
+    total_allocation_usdc: 1000
+    max_position_pct: 0.05
+    daily_loss_limit_pct: 1.0       # no intraday halt (measurement, not risk control)
+    max_trades_per_day: 288         # every 5m window in a day
+
+    min_btc_move_usd: 70
+    min_volume_percentile: 60
+    min_realized_vol_5m: 0.0
+
+    signal_weights:
+      price_momentum: 25
+      orderbook_imbalance: 20
+      volume_profile: 20
+      volatility_regime: 15
+      funding_rate: 10
+      skew_edge: 10
+
+    min_confluence_score: 65
+
+    kelly_fraction: 0.25
+    min_trades_for_kelly: 50
+    fallback_pct: 0.01
+
+    min_book_depth_usdc: 500
+
+    taker_fee: 0.0
+    assumed_polymarket_spread: 0.02
+    slippage_buffer: 0.005
+    fallback_fixed_pct: 0.01
+
   aggressive:
     total_allocation_usdc: 5000
     max_position_pct: 0.07

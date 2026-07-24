@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
 """
-Prospective data collector. This is the piece that unblocks the test that
-actually matters (README step 4): real Polymarket odds at the decision
-moment, plus the BTC L2 order book. Neither is meaningfully available as
-deep free history, so both have to be captured going forward -- meaning
-every day this isn't running is a day of data you won't have later.
+Prospective data collector for the BTC L2 order book, plus live Polymarket
+odds.
+
+SCOPE CHANGED -- READ THIS FIRST. This script was written on the assumption
+that neither Polymarket odds nor BTC depth was available as free history,
+so both had to be captured going forward. Testing against the live API
+showed that is only half true:
+
+  * Polymarket odds: available historically after all. The 5-minute markets
+    use a deterministic event slug (`btc-updown-5m-<window_start_unix>`) and
+    CLOB /prices-history serves closed markets at 1-minute fidelity. Use
+    scripts/fetch_polymarket_history.py -- it reconstructs months of
+    decision-moment odds in minutes, with the market's real resolution
+    attached. You do not need to wait weeks for this data.
+  * BTC L2 depth: still genuinely prospective-only. Nothing free serves
+    historical order-book depth, so this collector remains the way to get
+    `orderbook.csv`, and every day it isn't running is a day you can't get
+    back.
+
+So: run this for the order book (and as a live cross-check on the
+historical odds), not because the odds themselves are unobtainable.
 
 TWO OUTPUTS PER SNAPSHOT, DELIBERATELY REDUNDANT:
 
@@ -12,20 +28,27 @@ TWO OUTPUTS PER SNAPSHOT, DELIBERATELY REDUNDANT:
   orderbook.csv      parsed, in DataProvider's format
   odds_log.csv       parsed decision-moment odds (feeds build_resolutions.py)
 
-The raw JSONL is not redundancy for its own sake. This script could not be
-tested against the live Polymarket or Binance APIs from the environment it
-was written in (network-restricted), and API response shapes drift. If the
-parsing here is subtly wrong, the parsed CSVs will be quietly garbage --
-but the raw JSONL will still contain everything, so you can re-parse
-historical captures instead of discovering weeks later that the data is
-unrecoverable. Verify the first few snapshots by hand before walking away
-from this.
+The raw JSONL is not redundancy for its own sake: if the parsing here is
+ever subtly wrong, the parsed CSVs are quietly garbage, while the raw
+captures stay re-parseable. Keep it.
 
-ENDPOINTS USED (Polymarket CLOB, public/no-auth read endpoints):
-  GET https://clob.polymarket.com/midpoint?token_id=...   -> {"mid": "0.52"}
+VERIFIED AGAINST THE LIVE API. The response shapes below were confirmed
+directly, and the parsing in this file matches them: midpoint returns
+{"mid": "0.535"}, spread returns {"spread": "0.01"}, and book returns
+levels as {"price": "0.73", "size": "..."} with an `asset_id` echoing the
+token you asked for. UP and DOWN midpoints summed to 1.000. Two real bugs
+were found and fixed in the process -- see `discover()` (fetched one
+unpaginated page and so found nothing) and `snapshot_binance_depth()`
+(Binance answers 451 on many networks, silently yielding an empty book).
+Still hand-check your first few snapshots; shapes drift over time.
+
+ENDPOINTS USED (all public/no-auth reads):
+  GET https://clob.polymarket.com/midpoint?token_id=...   -> {"mid": "0.535"}
   GET https://clob.polymarket.com/book?token_id=...       -> {bids:[{price,size}], asks:[...]}
-  GET https://clob.polymarket.com/spread?token_id=...
+  GET https://clob.polymarket.com/spread?token_id=...     -> {"spread": "0.01"}
+  GET https://gamma-api.polymarket.com/events?slug=btc-updown-5m-<unix>
   GET https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=10
+      (falls back to OKX /api/v5/market/books when Binance returns 451)
 
 Usage:
   # 1. find the token id for the current BTC 5m market (prints candidates)
@@ -58,6 +81,8 @@ import requests
 CLOB_BASE = "https://clob.polymarket.com"
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 BINANCE_DEPTH = "https://api.binance.com/api/v3/depth"
+# fallback venue: api.binance.com is geo-blocked (451) on many networks
+OKX_DEPTH = "https://www.okx.com/api/v5/market/books"
 
 
 def now_ms() -> int:
@@ -71,21 +96,77 @@ def iso(ts_ms: int) -> str:
 # ---------------------------------------------------------------- discovery
 
 
-def discover(query: str, session=None, log=print):
-    """Queries Gamma for markets matching `query` and prints candidates with
-    their token ids. Deliberately does NOT guess a slug pattern -- you
-    confirm which market is the right one and pass its id explicitly."""
-    session = session or requests.Session()
-    resp = session.get(f"{GAMMA_BASE}/markets", params={"closed": "false", "limit": 100}, timeout=15)
-    resp.raise_for_status()
-    markets = resp.json()
+def current_window_slug(ts_ms: int | None = None, window_seconds: int = 300) -> str:
+    """The 5-minute BTC markets use a deterministic event slug keyed to the
+    window's start in unix seconds -- verified against the live API, e.g.
+    `btc-updown-5m-1781999400` is the 23:50-23:55 UTC window on 2026-06-20.
+    That makes discovery exact instead of a search over open markets."""
+    ts = (ts_ms if ts_ms is not None else now_ms()) // 1000
+    return f"btc-updown-5m-{ts - (ts % window_seconds)}"
 
+
+def resolve_current_market(session=None, window_seconds: int = 300, log=print):
+    """Returns (up_token_id, market_dict) for the window happening right now,
+    or (None, None). Use this instead of pinning a --token-id: these markets
+    roll over every 5 minutes, so any fixed id goes stale almost immediately."""
+    session = session or requests.Session()
+    slug = current_window_slug(window_seconds=window_seconds)
+    resp = session.get(f"{GAMMA_BASE}/events", params={"slug": slug}, timeout=15)
+    if resp.status_code != 200:
+        return None, None
+    events = resp.json()
+    if not events or not events[0].get("markets"):
+        log(f"  no open market for {slug} yet")
+        return None, None
+    market = events[0]["markets"][0]
+
+    outcomes = market.get("outcomes")
+    tokens = market.get("clobTokenIds")
+    if isinstance(outcomes, str):
+        outcomes = json.loads(outcomes)
+    if isinstance(tokens, str):
+        tokens = json.loads(tokens)
+    if not outcomes or not tokens or len(outcomes) != len(tokens):
+        return None, market
+    upper = [str(o).upper() for o in outcomes]
+    if "UP" not in upper:
+        return None, market
+    # index by name, never by position -- picking the wrong token inverts
+    # every probability collected and still looks perfectly plausible
+    return tokens[upper.index("UP")], market
+
+
+def discover(query: str, session=None, log=print, max_pages: int = 20):
+    """Queries Gamma for markets matching `query` and prints candidates with
+    their token ids.
+
+    Two fixes after testing this against the live API: it used to request a
+    single page of 100 open markets and filter client-side, which found
+    nothing useful because Polymarket has thousands of open markets and the
+    5-minute BTC ones were never on page 1. Gamma caps `limit` at 100
+    regardless of what you ask for, so this paginates with `offset`, and
+    prefers the `/public-search` endpoint, which actually searches."""
+    session = session or requests.Session()
     q = query.lower()
     hits = []
-    for m in markets:
-        blob = json.dumps(m).lower()
-        if q in blob:
-            hits.append(m)
+
+    resp = session.get(f"{GAMMA_BASE}/public-search",
+                       params={"q": query, "limit_per_type": 20}, timeout=20)
+    if resp.status_code == 200:
+        for event in (resp.json() or {}).get("events", []):
+            hits.extend(event.get("markets") or [])
+
+    if not hits:
+        for page in range(max_pages):
+            resp = session.get(f"{GAMMA_BASE}/markets",
+                               params={"closed": "false", "limit": 100, "offset": page * 100},
+                               timeout=20)
+            if resp.status_code != 200:
+                break
+            batch = resp.json()
+            if not batch:
+                break
+            hits.extend(m for m in batch if q in json.dumps(m).lower())
 
     if not hits:
         log(f"No open markets matched {query!r}. Try a broader --query, or browse "
@@ -187,13 +268,40 @@ def _best(levels, want_max: bool):
 
 
 def snapshot_binance_depth(symbol: str = "BTCUSDT", limit: int = 10, session=None):
+    """BTC L2 depth, from Binance if reachable and OKX otherwise.
+
+    The fallback is not belt-and-braces: api.binance.com answers HTTP 451
+    from many networks (including several cloud regions), and 451 is a hard
+    geo-block, not a transient error -- retrying never succeeds. Without a
+    fallback this returns an error dict on every single snapshot and the
+    collector quietly produces an orderbook.csv with no order book in it,
+    which you would not notice until a backtest weeks later showed
+    orderbook_imbalance at zero confidence throughout.
+
+    OKX's BTC-USDT book is a different venue with different depth, so the
+    `venue` field is recorded per snapshot -- do not pool the two without
+    accounting for that."""
     session = session or requests.Session()
-    try:
-        r = session.get(BINANCE_DEPTH, params={"symbol": symbol, "limit": limit}, timeout=8)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:  # noqa: BLE001
-        return None, {"_error": f"{type(e).__name__}: {e}"}
+    raw = None
+    venue = None
+    errors = {}
+
+    for name, url, params, unwrap in (
+        ("binance", BINANCE_DEPTH, {"symbol": symbol, "limit": limit}, lambda d: d),
+        ("okx", OKX_DEPTH, {"instId": "BTC-USDT", "sz": limit},
+         lambda d: (d.get("data") or [{}])[0]),
+    ):
+        try:
+            r = session.get(url, params=params, timeout=8)
+            r.raise_for_status()
+            raw = unwrap(r.json())
+            venue = name
+            break
+        except Exception as e:  # noqa: BLE001
+            errors[name] = f"{type(e).__name__}: {e}"
+
+    if raw is None:
+        return None, {"_error": errors}
 
     def split(levels):
         prices, sizes = [], []
@@ -207,8 +315,9 @@ def snapshot_binance_depth(symbol: str = "BTCUSDT", limit: int = 10, session=Non
 
     bid_p, bid_s = split(raw.get("bids"))
     ask_p, ask_s = split(raw.get("asks"))
-    parsed = {"bid_prices": bid_p, "bid_sizes": bid_s, "ask_prices": ask_p, "ask_sizes": ask_s}
-    return parsed, raw
+    parsed = {"bid_prices": bid_p, "bid_sizes": bid_s,
+              "ask_prices": ask_p, "ask_sizes": ask_s, "venue": venue}
+    return parsed, {"venue": venue, "response": raw, "_errors": errors or None}
 
 
 # ---------------------------------------------------------------- writers

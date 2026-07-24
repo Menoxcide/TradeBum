@@ -98,6 +98,14 @@ def run_backtest(
     assumed_pm_spread = config.get("assumed_polymarket_spread", 0.02)  # placeholder, see README
     slippage_buffer = config.get("slippage_buffer", 0.005)
     fallback_fixed_pct = config.get("fallback_fixed_pct", 0.01)
+    # Scales the volatility used by the fair-value fallback. Exists to test
+    # whether an apparent edge is really just a mis-estimated sigma: a
+    # too-high sigma pulls every fair value toward 0.5 and makes EVERY
+    # favorite look underpriced. Diagnostic only -- has no effect once
+    # real market_prob_up_at_decision values are present.
+    fair_value_vol_scale = config.get("fair_value_vol_scale", 1.0)
+    max_entry_price = config.get("max_entry_price")  # None = no cap
+    min_entry_price = config.get("min_entry_price")
 
     scorer = ConfluenceScorer(weights=weights, min_move_usd=min_move_usd)
     sizer = KellyVolatilitySizer(config, min_trades_for_kelly=config.get("min_trades_for_kelly", 50))
@@ -161,7 +169,9 @@ def run_backtest(
             move_so_far = btc_price - window.open_price
             vol_est = estimate_vol_per_sqrt_sec(bars_recent)
             if vol_est and vol_est > 0:
-                market_prob_up = fair_value_prob_up(move_so_far, entry_offset_sec, vol_est)
+                market_prob_up = fair_value_prob_up(
+                    move_so_far, entry_offset_sec, vol_est * fair_value_vol_scale
+                )
                 market_prob_source = "fair_value_fallback"
             else:
                 market_prob_up = 0.5
@@ -314,6 +324,23 @@ def run_backtest(
         # ---- resolve trade against ground truth ----
         entry_price = market_prob_up if candidate_direction == "UP" else (1 - market_prob_up)
         entry_price = min(0.99, max(0.01, entry_price))
+
+        # Price-band gate. Buying at 0.98 risks $1 to win $0.02: it needs the
+        # priced-in probability to be accurate to a fraction of a point, and
+        # on real BTC data it isn't (see README, "where the edge actually
+        # is"). Off by default -- setting it changes which trades the
+        # strategy takes, so re-validate on a holdout before trusting it.
+        if max_entry_price is not None and entry_price > max_entry_price:
+            atr_history.append(atr_5m)
+            volume_history.append(volume_current)
+            skip("entry_price_above_max")
+            continue
+        if min_entry_price is not None and entry_price < min_entry_price:
+            atr_history.append(atr_5m)
+            volume_history.append(volume_current)
+            skip("entry_price_below_min")
+            continue
+
         won = candidate_direction == window.outcome
 
         if won:
