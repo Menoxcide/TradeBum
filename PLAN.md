@@ -30,6 +30,40 @@ drifting without deciding is a loss. Every stage below has a kill criterion
 written before the data arrives, because that is the only time you can write
 one honestly.
 
+## Capital constraint: under $1k, and what it forces
+
+This is the number that decides whether Track A is a revenue path or a
+tuition payment, so work it through rather than assuming.
+
+Measured execution cost is 1.2pp at $50 and 2.8pp at $250 — cost roughly
+doubles as size grows, because you walk the book. So position size is pinned
+near the bottom: $50–100 per trade to keep costs tolerable, which is also
+where sub-$1k capital caps you anyway.
+
+Now the arithmetic. Suppose a 2pp edge exists and you find it — generous,
+given the detection floor here was 8pp. On a $50 position that is **$1.00 per
+trade gross**, before the 1.2pp cost takes ~$0.60. At 100 trades a month
+that is roughly **$40/month net**, on a strategy that took weeks to validate
+and can stop working without warning.
+
+The conclusion is not "trade more" — more trades on a smaller edge is how
+costs eat you. It is that **sub-$1k capital cannot produce meaningful income
+from this, even if the edge hunt succeeds.** Fixed costs and minimum sizes
+dominate, and no amount of skill changes the multiplication.
+
+So Track A is re-scoped, not cancelled:
+
+- It is a **bounded learning exercise with a real deliverable** — a working,
+  validated pipeline against a deep venue — not a revenue line.
+- Hard cap: **2 weeks and $200**, then it stops regardless of results.
+- Its actual payoff is Track B credibility: "here is a validation pipeline I
+  ran against live venue data" is the portfolio piece that sells B2.
+- If it finds something real, the finding keeps: edge does not expire the
+  moment you lack capital, and it becomes actionable if capital arrives.
+
+**Track B carries the revenue expectation.** It has no capital constraint at
+all, which is exactly why it is the right primary track at this size.
+
 ## The honest base rate
 
 Systematic trading against professional counterparties has a low success
