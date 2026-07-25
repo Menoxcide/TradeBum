@@ -339,6 +339,10 @@ def main():
                          "that is mispriced by this much in the momentum direction, then "
                          "run the whole pipeline on it. A 'no edge found' result is only "
                          "meaningful if the same code FINDS an edge that is genuinely there.")
+    ap.add_argument("--entry-offset-sec", type=int, default=120,
+                    help="decision point, seconds before close. MUST match the value used by "
+                         "fetch_polymarket_history.py, or the signal and the price come from "
+                         "different moments (see README 4c)")
     ap.add_argument("--power-sweep", action="store_true",
                     help="report the smallest mispricing this setup could detect")
     ap.add_argument("--seed", type=int, default=17)
@@ -351,7 +355,8 @@ def main():
         friction = cfg.get("assumed_polymarket_spread", 0.02) / 2 + cfg.get("slippage_buffer", 0.005)
 
     provider = DataProvider(args.data_dir)
-    rows = build_dataset(provider, min_move_usd=args.min_move_usd)
+    rows = build_dataset(provider, entry_offset_sec=args.entry_offset_sec,
+                         min_move_usd=args.min_move_usd)
     rows.sort(key=lambda r: r["window_start_ms"])
 
     if args.inject_edge is not None:
