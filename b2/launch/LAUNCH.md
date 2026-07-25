@@ -95,7 +95,14 @@ Reply to anyone who bites:
 >    tried before landing on it.
 >
 > You'll get back a report with the verdict, confidence intervals, and your
-> detection floor. Usually takes me a day.
+> **detection floor** — the smallest edge your data could actually have
+> confirmed. Usually takes me a day.
+>
+> That last number is the one I'd care about most in your position. Plenty of
+> analysis concludes "no edge here" when the honest answer is "this data
+> couldn't have detected an edge either way" — those look identical in output
+> and mean opposite things for what you do next. One says stop, the other says
+> collect more data.
 >
 > Fair warning: most come back negative. That's the base rate for strategy
 > code, not a comment on yours — I killed my own after seven tests.
@@ -122,11 +129,17 @@ page (the artifact works as one):
 
 > **Backtest validation — $400.** Send your data and your claim, get back a
 > report with the verdict, the confidence intervals, and the smallest edge your
-> data could actually have detected. Most come back negative; that's what
-> you're paying to find out before you trade it. Blocked submissions —
-> where the data has a defect that can't be corrected downstream — are $150,
-> because identifying that is usually worth more than the analysis would have
-> been.
+> data could actually have detected.
+>
+> That last number is the one most analysis skips. "No edge" and "this data
+> can't tell you" look identical and mean opposite things — one says abandon
+> the strategy, the other says get more data. Being told the wrong one costs
+> you either a working idea or a year of searching noise.
+>
+> Most come back negative; that's what you're paying to find out before you
+> trade it. Blocked submissions — where the data has a defect that can't be
+> corrected downstream — are $150, because identifying that is usually worth
+> more than the analysis would have been.
 
 $400 is deliberate: cheap enough to be an easy yes against the cost of trading
 a broken strategy, expensive enough to filter people who want a rubber stamp.
@@ -144,8 +157,13 @@ That is a real side income, not a business, and it is roughly the honest
 ceiling for one person with no capital and no existing audience. Anyone
 promising more from this starting position is selling something.
 
-The compounding asset is reputation for calling things dead. That is rare, and
-it is why the negative result gets led with rather than buried.
+The compounding asset is reputation for calling things dead *and for knowing
+when you cannot call them either way*. Both are rare. A head-to-head eval on a
+dataset with a planted leak found that a competent analyst catches the leak
+unaided — but then declared the market "efficiently priced, nothing to
+exploit", a confident negative the sample size could not support. Bounding what
+the data could have shown is the part that is actually hard to reproduce, so
+lead with it.
 
 ---
 
