@@ -128,6 +128,18 @@ def run_backtest(
 
     for i, window in enumerate(provider.resolutions):
         decision_ts = window.window_end_ms - entry_offset_sec * 1000
+
+        # Align the signal to the price we could actually have paid. The
+        # historical odds come from a 1-minute-fidelity series, so the last
+        # print at or before the nominal decision moment is typically ~56s
+        # old. Scoring the signal at the nominal moment while paying that
+        # older price lets the strategy see a move the price has not yet
+        # reacted to -- pure look-ahead, and on the first real-odds run it
+        # fabricated roughly $2/trade of edge. Shifting the decision back to
+        # the price's own timestamp costs some signal freshness, which is
+        # honest: you cannot trade on information newer than your quote.
+        if window.prob_age_sec:
+            decision_ts -= int(window.prob_age_sec * 1000)
         if decision_ts < window.window_start_ms:
             decision_ts = window.window_start_ms
 
@@ -154,6 +166,11 @@ def run_backtest(
         orderbook = provider.orderbook_as_of(decision_ts)
         funding_rate = provider.funding_as_of(decision_ts)
 
+        # time actually left when the decision is made, after any staleness
+        # shift above -- the fair-value math is a function of this, so it must
+        # not keep using the nominal offset
+        seconds_to_close = max(1, (window.window_end_ms - decision_ts) // 1000)
+
         market_prob_up = window.market_prob_up_at_decision
         market_prob_source = "real"
         if market_prob_up is None:
@@ -170,7 +187,7 @@ def run_backtest(
             vol_est = estimate_vol_per_sqrt_sec(bars_recent)
             if vol_est and vol_est > 0:
                 market_prob_up = fair_value_prob_up(
-                    move_so_far, entry_offset_sec, vol_est * fair_value_vol_scale
+                    move_so_far, seconds_to_close, vol_est * fair_value_vol_scale
                 )
                 market_prob_source = "fair_value_fallback"
             else:
@@ -190,7 +207,7 @@ def run_backtest(
             "timestamp_ms": decision_ts,
             "btc_price": btc_price,
             "window_open_price": window.open_price,
-            "seconds_to_close": entry_offset_sec,
+            "seconds_to_close": seconds_to_close,
             "bars_recent": bars_recent,
             "orderbook": orderbook,
             "funding_rate": funding_rate,

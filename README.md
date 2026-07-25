@@ -5,11 +5,18 @@ edge *before* any of it touches `EXECUTE=true`. It replays historical data
 through the actual signal/sizing/risk code (not a simplified stand-in) and
 reports statistics with confidence intervals, not point estimates.
 
-**Status: it has now been run on real data.** 114 days of real Binance BTC
-1-minute bars (2026-04-01 to 2026-07-23, 164,160 bars, no gaps) and real
-historical Polymarket odds. What that run found is below. Earlier versions
-of this file said "ships with no real market data" — that is no longer
-true, and the conclusions have changed as a result.
+**Status: it has now been run on real data, and the answer is no.** 114 days
+of real Binance BTC 1-minute bars (2026-04-01 to 2026-07-23, 164,160 bars,
+no gaps) and 8,640 windows of real historical Polymarket odds with real
+resolutions. Priced against what Polymarket actually quoted, the strategy's
+mean P&L is **$0.08/trade with a 95% CI of [−$0.14, +$0.28]** — statistically
+indistinguishable from zero, before friction. No bucket of the calibration
+table deviates significantly from its priced-in probability.
+
+That is a real result, not a failure to measure: the market prices these
+windows about right, and the `$70-move` momentum signal does not add
+information to them. Details in §4b; the two bugs that initially hid this
+answer are in §4c and "Corrections".
 
 ## Quickstart
 
@@ -37,7 +44,7 @@ python scripts/run_backtest.py --data-dir ./data/historical --profile research \
 python scripts/analyze_calibration.py --trades ./data/trades.jsonl \
     --strategy naive_momentum
 
-# tests, including three look-ahead / no-fake-edge self-checks
+# tests, including the look-ahead / no-fake-edge self-checks
 python tests/test_smoke.py
 ```
 
@@ -126,7 +133,61 @@ that 2.5pp figure is itself an unverified assumption.
 
 More importantly, everything above is measured against *geometry*, not
 against Polymarket. "Beats a random walk" and "beats the price Polymarket
-actually quotes" are different claims, and only the second one pays.
+actually quotes" are different claims, and only the second one pays. The
+next section runs the second one.
+
+### 4b. Against real Polymarket prices, the edge is gone
+
+8,640 windows of real historical odds (2026-06-24 to 2026-07-23), 8,605
+with a real decision-moment price and the market's real resolution:
+
+| bucket | n | predicted | realized | deviation |
+|---|---|---|---|---|
+| 0.70–0.80 | 76 | 76.9% | 72.4% | −4.5pp |
+| 0.80–0.90 | 305 | 86.2% | 88.5% | +2.4pp |
+| 0.90–0.95 | 338 | 92.4% | 92.6% | +0.2pp |
+| 0.95–1.01 | 243 | 96.9% | 98.4% | +1.5pp |
+| **all** | **972** | **90.1%** | **90.8%** | **+0.7pp** |
+
+**Not one bucket's 95% interval excludes its predicted value.** Mean P&L is
+**$0.08/trade, 95% CI [−$0.14, +$0.28]** — indistinguishable from zero, and
+that's *before* the ~2.5pp friction budget. Split in half by date, each half
+is independently indistinguishable from zero (+1.18pp and −0.04pp).
+
+This also explains §1–3 rather than contradicting them. The deviations
+against geometry were real, but they were an edge over a *naive Gaussian
+model*, not over the market: Polymarket's prices already reflect the
+fat-tailed structure that `fair_value_prob_up` misses. Beating your own
+benchmark is not the same as beating the people quoting the market.
+
+**Conclusion for the strategy as specified: no detectable edge.** The
+`confluence` pipeline fires 1 trade in 8,640 windows, so nothing about the
+scoring, sizing, or execution machinery has been validated either.
+
+### 4c. The timing trap — read this before trusting any real-odds run
+
+The first real-odds run reported `naive_momentum` at **$2.10/trade, CI
+[$1.81, $2.41]** — a 21% return per trade, at 95.6% win rate, in a market
+doing ~$255k per window. That number was entirely an artifact, and it is
+worth understanding because it looks completely plausible in a results
+table.
+
+`/prices-history` is 1-minute fidelity, so the last available print before
+the T-120s decision point is typically ~56s old. The engine was scoring the
+signal at T-120s while paying that older price: **it read three minutes of
+move and paid a price quoted before the last minute of it.** The strategy
+was buying from a market that had not yet seen the move it was trading on.
+
+The engine now shifts the decision timestamp back by `prob_age_sec` so the
+signal and the price are evaluated at the same instant. That single change
+took mean P&L from $2.10 to $0.08 and moved the CI across zero. The cost is
+real — you lose ~56s of signal freshness — but that is the honest constraint:
+you cannot trade on information newer than your quote.
+
+The general lesson: whenever a price and a signal come from different
+sources, verify they are sampled at the same moment. A stale price paired
+with a fresh signal is look-ahead bias wearing a convincing disguise, and
+here it fabricated a 21%-per-trade edge.
 
 ### 5. Sample size, and a caution about it
 
@@ -174,6 +235,14 @@ a 300-second window, on every trade. `bars_as_of` now returns only bars that
 had *closed* by the query time (`provider.infer_bar_duration_ms`), and
 `tests/test_smoke.py` has a regression test the old look-ahead test missed.
 
+**Chainlink and Binance disagree on 3.4% of windows.** Over the 8,640
+windows with real resolutions, 290 settled the opposite way from what the
+Binance close implied. They are exactly the windows you'd expect: median
+absolute move of **$2.01**, versus $34 across all windows. Near-flat windows
+are where two feeds differ on the last dollar — and they're also where a
+momentum strategy's marginal trades live, so grading them against the wrong
+feed is not a rounding error.
+
 **A tie resolves UP.** The market resolves Up if the closing price is
 "greater than *or equal to*" the opening price, which matches what
 `ResolvedWindow.outcome` already did. 0.12% of real windows close exactly
@@ -214,21 +283,25 @@ weaker question (§4 above).
 
 A caveat on the historical odds: `/prices-history` is 1-minute fidelity, so
 the last print before the decision moment is typically 55–60s stale. A live
-bot would see the current book. Expect the true decision-moment price to sit
-somewhat closer to the eventual outcome than these do, which makes any edge
-measured against them an *optimistic* estimate. `prob_age_sec` records the
-staleness per row.
+bot would see the current book. `prob_age_sec` records the staleness per row
+and **the engine uses it to shift the decision timestamp**, so the signal is
+measured at the same instant as the price being paid — see §4c for what
+happens when it doesn't.
 
 ## Still placeholders — don't trust these as-is
 
 - `risk/ev_gate.py::confluence_score_to_model_prob` — a flat-50%-anchored
-  linear map, not a fitted model. It's why `confluence` fires **zero trades**
-  on real data: anchored at 50%, it essentially never out-bids a market
-  priced near the geometry-implied value. That is the correct behavior for
-  an unfit model, not a bug. A real one should start from
+  linear map, not a fitted model. It's why `confluence` fires ~zero trades
+  on real data (1 trade in 8,640 windows): anchored at 50%, it essentially
+  never out-bids a market priced near fair value. That is the correct
+  behavior for an unfit model, not a bug. A real one should start from
   `fair_value_prob_up(...)` and add a *learned* adjustment — it needs to say
   "more likely than geometry implies", not "more likely than a coin flip".
-  Fitting it is the single highest-value change left.
+  Fitting it is the single highest-value change left. Be aware of what §4b
+  implies for it, though: the thing a fitted model would have to beat is the
+  market price, and on this sample the market price is already well
+  calibrated. Fitting a better model is worth doing to *confirm* there's no
+  edge; it is not a likely route to finding one.
 - `signal_weights` — hand-set (25/20/20/15/10/10), straight from the
   scaffolding doc. Fit them; don't eyeball them. Note nothing has yet
   demonstrated that any signal *other than* price momentum contributes
