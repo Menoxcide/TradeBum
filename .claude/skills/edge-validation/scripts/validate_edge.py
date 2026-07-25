@@ -186,6 +186,71 @@ def simulate(rows, beta, features, threshold, friction, mode, stake=1.0, use_off
     return out
 
 
+def implausibility_check(median_dev, holdout, mode, use_offset):
+    """Shout when a result is too good to be real.
+
+    No statistical test can tell a data leak from a genuine discovery -- if a
+    feature contains the future, the correlation really is there and every
+    holdout will confirm it. What *can* be checked is magnitude. Markets with
+    real participants do not leave 30-point mispricings or 80%-per-trade
+    returns lying around, so a result of that size is a fact about the code
+    that built the features, not about the market.
+
+    This is the one check that has to be automatic. A user who already knows to
+    be suspicious does not need the tool; the user who needs it is the one
+    delighted by their own number.
+    """
+    flags = []
+    if use_offset and median_dev is not None and median_dev > 0.15:
+        flags.append(
+            f"The model disagrees with the market by a median of {median_dev:.3f} "
+            f"({median_dev*100:.0f} probability points). Real mispricings in a traded "
+            f"market are fractions of a point. A gap this size means a feature almost "
+            f"certainly contains information the market did not have -- i.e. the future."
+        )
+    if holdout and holdout.get("mean") is not None:
+        m = holdout["mean"]
+        limit = 0.10 if mode == "returns" else 0.20
+        if m > limit:
+            flags.append(
+                f"Holdout return of {m:+.3f} per unit staked ({m*100:.0f}% per trade). "
+                f"Sustained returns of that size do not exist in liquid markets; if they "
+                f"did, the opportunity would be gone before you finished measuring it."
+            )
+    if not flags:
+        return
+
+    print("\n" + "=" * 72)
+    print("IMPLAUSIBLE MAGNITUDE -- treat this as a bug report, not a discovery")
+    print("=" * 72)
+    for f in flags:
+        for line in _wrap(f, 70):
+            print(f"  {line}")
+        print()
+    print("  What to check, in order:")
+    print("    1. Does any feature use data from at or after the decision moment?")
+    print("       Bars stamped at their open are the usual culprit: the bar covering")
+    print("       the decision had not finished forming, so its close is the future.")
+    print("    2. Lag every feature by one full period and rerun. If the edge")
+    print("       collapses, you have found it. That test is decisive and cheap.")
+    print("    3. Check the outcome column was not used, directly or via something")
+    print("       derived from it, in building any feature.")
+    print("=" * 72)
+
+
+def _wrap(text, width=70):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def describe(trades, label, quiet=False):
     if not trades:
         if not quiet:
@@ -397,12 +462,16 @@ def main():
                 best = (t, res)
 
     print("\n--- holdout (once) ---")
+    holdout_res = None
     if best is None:
         print("  Nothing produced a positive lower bound on validate, so the holdout\n"
               "  stays unused. Spending it now would just be another draw from noise.")
     else:
-        describe(simulate(hold, beta, features, best[0], args.friction, args.mode,
-                          use_offset=use_offset), f"HOLDOUT thr {best[0]:.3f}")
+        holdout_res = describe(simulate(hold, beta, features, best[0], args.friction,
+                                        args.mode, use_offset=use_offset),
+                               f"HOLDOUT thr {best[0]:.3f}")
+
+    implausibility_check(med, holdout_res, args.mode, use_offset)
 
     print("\n--- zero-friction check ---")
     describe(simulate(val, beta, features, thresholds[0], 0.0, args.mode,
