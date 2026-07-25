@@ -19,8 +19,14 @@ probability points**, and a power sweep shows this setup could only confirm
 a mispricing of **~8pp** at this sample size — so any edge that exists is
 smaller than 8pp, and anything under ~1pp loses to costs anyway. The market
 prices these windows about right and the `$70-move` signal adds nothing to
-them. Details in §4b/§4d; the two bugs that initially hid this answer are in
-§4c and "Corrections".
+them.
+
+Seven independent tests were run, including thinner and longer-dated
+markets and a structural Chainlink-vs-Binance settlement wedge. All seven
+are negative (§4g). The thin markets *are* measurably less efficiently
+priced — and are also the ones you cannot get filled in for less than the
+mispricing is worth (§4f). Details in §4b/§4d; the two bugs that initially
+hid this answer are in §4c and "Corrections".
 
 ## Quickstart
 
@@ -290,6 +296,66 @@ friction budget is ~1pp for small orders rather than 2.5pp, and it tells you
 size matters: cost roughly doubles between $50 and $250 because you walk the
 book. Caveat: this is a small live sample (tens of snapshots over a few
 windows) — rerun it longer before leaning on the numbers.
+
+### 4f. Other markets: mispricing scales with thinness, and so does the cost of taking it
+
+The 5-minute BTC market is the most heavily traded of this family, so the
+obvious next move is thinner and longer-dated markets. Every Polymarket
+up/down family keys its slug on the window start, so the same pipeline runs
+against all of them unchanged. Three markets, same code, same discipline:
+
+| market | volume/window | \|model − market\| median | result |
+|---|---|---|---|
+| BTC 5-minute | ~$255,000 | **0.0065** | nothing passed validate |
+| BTC 15-minute | ~$37,000 | **0.0189** | nothing passed validate |
+| ETH 5-minute | ~$6,000 | **0.0182** | nothing passed validate |
+
+The hypothesis was right about the first column: **thinner markets are
+measurably less efficiently priced.** The model departs from the market
+roughly 3× further on the thin markets than on BTC 5-minute, and that
+ordering tracks volume, not chance.
+
+It doesn't help, for a reason that is structural rather than statistical.
+Measured execution cost on BTC 5-minute — the *most* liquid of the three —
+is already 1.2pp for a $50 order and 2.8pp for $250 (§4e). The mispricing on
+the thin markets is ~1.8pp, and the cost of trading a market at $6k/window
+is necessarily worse than one at $255k/window, not better. **The markets
+where the price is loosest are precisely the markets where you cannot get
+filled for less than the looseness is worth.** Mispricing and illiquidity
+are the same phenomenon seen from two sides.
+
+That is why "find a thinner market" is not the answer here, and it
+generalizes: on this venue, any edge large enough to detect lives in a book
+too thin to harvest it.
+
+Neither thin market showed directional profit either — both are flat at
+every threshold including at zero friction, so this is not a cost problem
+that better execution would solve.
+
+### 4g. Everything that was tested
+
+Seven independent tests, all negative. Recording the failures matters as
+much as recording a success would: without this list, the next person
+re-runs them.
+
+| # | test | outcome |
+|---|---|---|
+| 1 | momentum vs random-walk geometry | +0.7pp aggregate, under friction |
+| 2 | momentum vs real Polymarket prices | $0.08/trade, CI [−0.14, +0.28] |
+| 3 | 7-feature model vs market (BTC 5m) | deviation 0.65pp, nothing passed |
+| 4 | Chainlink/Binance settlement wedge | coefficient wrong sign (+0.009) |
+| 5 | BTC 15-minute market | nothing passed validate |
+| 6 | ETH 5-minute market | nothing passed validate |
+| 7 | detection floor (power sweep) | ~8pp at this sample size |
+
+**A note on multiple comparisons.** These are seven test families. At a 95%
+level, running seven tests gives roughly a 1-in-3 chance that at least one
+comes back "significant" from luck alone. Nothing did — which makes the
+negative result *stronger*, not weaker. But it also means that if an eighth
+test had come back positive, the honest reading would have been "this is
+the one in three", and the correct response would have been fresh
+out-of-sample data rather than a position. Any future test added here
+inherits that burden.
 
 ## Corrections to earlier assumptions
 
