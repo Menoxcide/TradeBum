@@ -1,0 +1,45 @@
+--- data hygiene ---
+  rows: 12000   outcome=1: 5978 (49.8%)
+  market Brier 0.2190 vs always-base-rate 0.2500 (market is informative)
+
+split by time: train 6000 / validate 3000 / holdout 3000
+friction per entry: 0.01
+
+--- coefficients (departure from the market price) ---
+  intercept                -0.18132
+  momentum                 +2.80264
+  volume_ratio             +0.14509
+
+|model - market| on validate: median 0.3703, p90 0.5962
+
+--- validate (look freely) ---
+  threshold 0.005                n= 2992  mean=+0.8055 [+0.7701,+0.8452]  win=91.7%  POSITIVE
+  threshold 0.010                n= 2980  mean=+0.8111 [+0.7739,+0.8483]  win=92.0%  POSITIVE
+  threshold 0.020                n= 2964  mean=+0.8156 [+0.7777,+0.8530]  win=92.2%  POSITIVE
+  threshold 0.030                n= 2943  mean=+0.8219 [+0.7869,+0.8613]  win=92.4%  POSITIVE
+  threshold 0.050                n= 2867  mean=+0.8425 [+0.8040,+0.8826]  win=92.8%  POSITIVE
+  threshold 0.080                n= 2807  mean=+0.8598 [+0.8219,+0.9001]  win=93.3%  POSITIVE
+
+--- holdout (once) ---
+  HOLDOUT thr 0.080              n= 2799  mean=+0.8354 [+0.7999,+0.8720]  win=93.7%  POSITIVE
+
+--- zero-friction check ---
+  validate, no friction          n= 2992  mean=+0.8509 [+0.8126,+0.8943]  win=91.7%  POSITIVE
+  If this is also flat, the problem is the signal, not execution.
+
+--- detection floor: what could this dataset have found? ---
+    injected   |model-mkt|                             holdout
+        REAL        0.3703  +0.8354 [+0.7999,+0.8720] POSITIVE
+       0.010        0.0039             nothing passed validate
+       0.020        0.0065             nothing passed validate
+       0.030        0.0117      -0.0159 [-0.0916,+0.0609] flat
+       0.050        0.0253      +0.0158 [-0.0822,+0.1172] flat
+       0.080        0.0439      +0.0837 [-0.0104,+0.1765] flat
+       0.120        0.0733  +0.1862 [+0.1364,+0.2395] POSITIVE
+
+DETECTION FLOOR: ~0.120. Edges smaller than this are invisible here.
+  That floor is well above your 0.01 cost, so the tradeable
+  range (0.010 to 0.120) is entirely unmeasurable with
+  this much data. Confirming an edge at the cost threshold needs roughly
+  144x more rows. Decide whether that data is obtainable BEFORE
+  spending more time searching.
