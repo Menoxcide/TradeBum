@@ -230,6 +230,34 @@ def pipeline(rows, features, friction, mode, thresholds, min_trades, use_offset,
     return best[0], hres, med_dev, beta
 
 
+def injection_grid(rows, friction, mode):
+    """Edge sizes to inject, anchored on FRICTION rather than fixed constants.
+
+    This matters more than it looks. An injected edge is expressed in the units
+    of the outcome: probability points in `market` mode, but fractional returns
+    in `returns` mode. A fixed grid like 0.01-0.12 is sensibly scaled for
+    probabilities and absurd for returns, where 0.01 means a 1% move per trade
+    -- enormous over a short horizon. Such a grid reports a "floor" far above
+    anything realistic and makes every return-mode test look hopeless, which is
+    a statement about the grid rather than about the data.
+
+    Anchoring on friction fixes both modes at once, because the question worth
+    asking is never "could I detect any edge" but "could I detect an edge big
+    enough to be worth trading" -- and cost is what defines worth trading. The
+    multiples then read directly: a floor at 4x cost means this data could only
+    have confirmed an edge four times larger than the cost of capturing it.
+    """
+    base = friction if friction and friction > 0 else None
+    if base is None:
+        # No friction supplied, so fall back to the outcome's own dispersion.
+        if mode == "returns":
+            rets = [abs(r.get("ret") or 0.0) for r in rows if r.get("ret") is not None]
+            base = (statistics.median(rets) if rets else 0.01) * 0.25
+        else:
+            base = 0.01
+    return [(m, base * m) for m in (0.25, 0.5, 1, 2, 4, 8, 16)]
+
+
 def reroll(rows, edge, features, seed, mode):
     """Positive control: rebuild outcomes from a world mispriced by `edge` in
     the direction of the first feature. Real prices, real features, known
@@ -382,9 +410,15 @@ def main():
     print("  If this is also flat, the problem is the signal, not execution.")
 
     print("\n--- detection floor: what could this dataset have found? ---")
-    print(f"  {'injected':>10}  {'|model-mkt|':>12}  {'holdout':>34}")
-    floor = None
-    for edge in (0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12):
+    grid = injection_grid(rows, args.friction, args.mode)
+    if args.friction and args.friction > 0:
+        print(f"  (injected sizes are multiples of your {args.friction} cost -- the question is")
+        print( "   whether an edge worth TRADING would have been visible, not any edge at all)")
+    else:
+        print("  (no friction given, so sizes are scaled to the outcome's own dispersion)")
+    print(f"\n  {'injected':>22}  {'|model-mkt|':>12}  {'holdout':>34}")
+    floor = floor_mult = None
+    for mult, edge in [(0.0, 0.0)] + grid:
         sample = rows if edge == 0 else reroll(rows, edge, features, args.seed, args.mode)
         try:
             thr, hres, dev, _ = pipeline(sample, features, args.friction, args.mode,
@@ -396,25 +430,31 @@ def main():
         else:
             verdict = f"{hres['mean']:+.4f} [{hres['lo']:+.4f},{hres['hi']:+.4f}] {hres['verdict']}"
             if hres["verdict"] == "POSITIVE" and floor is None and edge > 0:
-                floor = edge
-        label = "REAL" if edge == 0 else f"{edge:.3f}"
-        print(f"  {label:>10}  {dev:>12.4f}  {verdict:>34}")
+                floor, floor_mult = edge, mult
+        label = "REAL DATA" if edge == 0 else f"{edge:.6g}  ({mult:g}x cost)"
+        print(f"  {label:>22}  {dev:>12.4f}  {verdict:>34}")
 
     print()
     if floor is None:
-        print("DETECTION FLOOR: not reached even at the largest injected edge. This\n"
-              "dataset cannot confirm an edge of ANY size -- it is too small, too noisy,\n"
-              "or the features are unrelated to the outcome. Get more data before\n"
-              "concluding anything, in either direction.")
+        print("DETECTION FLOOR: not reached even at the largest injected edge -- this\n"
+              "dataset cannot confirm an edge of ANY size. Too small, too noisy, or the\n"
+              "features are unrelated to the outcome. That is NOT a negative result:\n"
+              "get more data before concluding anything in either direction.")
     else:
-        print(f"DETECTION FLOOR: ~{floor:.3f}. Edges smaller than this are invisible here.")
-        if floor > args.friction * 2:
-            need = (floor / max(args.friction, 1e-9)) ** 2
-            print(f"  That floor is well above your {args.friction} cost, so the tradeable\n"
-                  f"  range ({args.friction:.3f} to {floor:.3f}) is entirely unmeasurable with\n"
-                  f"  this much data. Confirming an edge at the cost threshold needs roughly\n"
-                  f"  {need:.0f}x more rows. Decide whether that data is obtainable BEFORE\n"
-                  f"  spending more time searching.")
+        print(f"DETECTION FLOOR: ~{floor:.6g}, which is {floor_mult:g}x your cost of "
+              f"{args.friction:g}.")
+        if floor_mult <= 1:
+            print("  The floor is at or below your cost, so this test was capable of finding\n"
+                  "  anything worth trading. A negative result here is genuinely informative.")
+        else:
+            need = floor_mult ** 2
+            print(f"  Edges smaller than {floor_mult:g}x cost are invisible here, so the whole\n"
+                  f"  tradeable range ({args.friction:g} to {floor:.6g}) is unmeasurable with this\n"
+                  f"  much data. Confirming an edge at the cost threshold needs roughly {need:.0f}x\n"
+                  f"  more rows -- decide whether that data is obtainable BEFORE searching further.")
+
+    print("\n  Note: in `returns` mode the zero-friction interval above is usually the\n"
+          "  tighter bound on any real edge. Read it alongside this floor, not instead.")
 
 
 if __name__ == "__main__":
