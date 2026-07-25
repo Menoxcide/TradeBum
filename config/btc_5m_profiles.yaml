@@ -34,9 +34,15 @@ profiles:
     min_book_depth_usdc: 500
 
     taker_fee: 0.0                  # NEW-BACKTEST: verify against current Polymarket fee schedule
-    assumed_polymarket_spread: 0.02 # NEW-BACKTEST: placeholder -- replace with real historical
-                                     # Polymarket YES/NO book spread if you have it (this is NOT
-                                     # the same order book as orderbook_imbalance, see README)
+    assumed_polymarket_spread: 0.01 # MEASURED, not assumed: median nominal spread on the live
+                                     # 5m BTC book at the decision point (scripts/
+                                     # measure_execution_cost.py). Was 0.02 as a placeholder.
+                                     # A marketable buy crosses ~half of this. Effective cost
+                                     # rises with size: ~0.6pp for $50, ~1.7pp for $250, since
+                                     # you walk the book. Sample is small (tens of snapshots) --
+                                     # rerun the sampler for longer before leaning on it.
+                                     # NOTE this is Polymarket's YES/NO share book, NOT the BTC
+                                     # book that feeds orderbook_imbalance.
     slippage_buffer: 0.005
     fallback_fixed_pct: 0.01        # NEW-BACKTEST: fixed size used by the naive_momentum/coinflip baselines
 
@@ -78,7 +84,7 @@ profiles:
     min_book_depth_usdc: 500
 
     taker_fee: 0.0
-    assumed_polymarket_spread: 0.02
+    assumed_polymarket_spread: 0.01  # measured -- see the conservative profile
     slippage_buffer: 0.005
     fallback_fixed_pct: 0.01
 
@@ -109,6 +115,6 @@ profiles:
     min_book_depth_usdc: 500
 
     taker_fee: 0.0
-    assumed_polymarket_spread: 0.02
+    assumed_polymarket_spread: 0.01  # measured -- see the conservative profile
     slippage_buffer: 0.005
     fallback_fixed_pct: 0.01

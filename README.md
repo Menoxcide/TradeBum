@@ -13,10 +13,14 @@ mean P&L is **$0.08/trade with a 95% CI of [−$0.14, +$0.28]** — statisticall
 indistinguishable from zero, before friction. No bucket of the calibration
 table deviates significantly from its priced-in probability.
 
-That is a real result, not a failure to measure: the market prices these
-windows about right, and the `$70-move` momentum signal does not add
-information to them. Details in §4b; the two bugs that initially hid this
-answer are in §4c and "Corrections".
+That is a real result, not a failure to measure. A logistic model fitted
+against the market price (§4d) departs from it by a median of **0.65
+probability points**, and a power sweep shows this setup could only confirm
+a mispricing of **~8pp** at this sample size — so any edge that exists is
+smaller than 8pp, and anything under ~1pp loses to costs anyway. The market
+prices these windows about right and the `$70-move` signal adds nothing to
+them. Details in §4b/§4d; the two bugs that initially hid this answer are in
+§4c and "Corrections".
 
 ## Quickstart
 
@@ -43,6 +47,13 @@ python scripts/run_backtest.py --data-dir ./data/historical --profile research \
 # 5. is the entry price a good forecast of the outcome?
 python scripts/analyze_calibration.py --trades ./data/trades.jsonl \
     --strategy naive_momentum
+
+# 6. does anything beat the market price? and how small an edge could we see?
+python scripts/fit_model.py --data-dir ./data/real --profile research --power-sweep
+
+# 7. what does execution actually cost? (live sampler)
+python scripts/measure_execution_cost.py --out ./data/live/exec_cost.csv --minutes 60
+python scripts/measure_execution_cost.py --analyze ./data/live/exec_cost.csv
 
 # tests, including the look-ahead / no-fake-edge self-checks
 python tests/test_smoke.py
@@ -204,6 +215,82 @@ signal has edge and `conservative` to ask what you'd actually have traded,
 and don't let a 569-trade CI that barely excludes zero convince you of a
 sign.
 
+### 4d. Can this be made cash-flow positive? No — and here's the arithmetic
+
+`scripts/fit_model.py` replaces the hand-drawn `model_prob` with a logistic
+regression, fitted with the **market's own logit as a fixed offset**. That
+framing is the point: the coefficients measure departures *from the market
+price*, so the model is answering "does any feature add information the
+market doesn't already have", not the useless "can we predict outcomes"
+(the market price already predicts outcomes well). Discipline is train /
+validate / holdout, split by time — never randomly, because adjacent
+5-minute windows are correlated and a random split leaks.
+
+Fitted on 4,292 windows over `z_move`, `geo_minus_mkt`, `atr_ratio`,
+`vol_ratio`, `vol_pctile`, `funding` and `mkt_extremity`:
+
+**|model − market| has a median of 0.0065.** The best model these features
+support disagrees with the market by two thirds of one probability point.
+Trading those disagreements loses money at every threshold — and loses at
+**zero friction too**, so this is not an execution problem that better fills
+could fix.
+
+**The detection floor.** "No edge found" is unfalsifiable without knowing
+what could have been found, so `--power-sweep` re-rolls outcomes from a
+world mispriced by a known amount and reruns the whole pipeline:
+
+| injected mispricing | median &#124;model−market&#124; | holdout verdict |
+|---|---|---|
+| **real data** | 0.0065 | nothing passed validate |
+| 0.5pp | 0.0142 | nothing passed validate |
+| 1.0pp | 0.0153 | nothing passed validate |
+| 2.0pp | 0.0243 | nothing passed validate |
+| 3.0pp | 0.0345 | flat |
+| 5.0pp | 0.0506 | flat |
+| 8.0pp | 0.0762 | **POSITIVE** |
+
+With 30 days of data this setup can only confirm a mispricing of roughly
+**8 percentage points**. The measured deviation is 0.65pp. Nothing in
+between is distinguishable from noise.
+
+**Why more searching cannot fix that.** Detection scales with √n, so
+dropping the floor from 8pp to the ~1pp friction threshold needs about
+**64× more data** — on the order of five years of 5-minute windows. These
+markets are a few months old. The data required to validate an edge at the
+size that would actually be tradeable *does not exist yet*, and won't for
+years.
+
+So the honest statement is not "we didn't find edge", it's: **any edge here
+is smaller than 8pp, and anything smaller than ~1pp is unprofitable after
+costs regardless.** That interval is where all the remaining possibilities
+live, and it is not a place to deploy capital.
+
+The one thing guaranteed to produce a positive backtest is to keep re-cutting
+these 30 days until something shows green. That result would be noise, and
+it would lose money live. It is deliberately not in this repo.
+
+### 4e. What friction actually costs (measured, not assumed)
+
+`scripts/measure_execution_cost.py` samples the live 5-minute book and walks
+it for realistic order sizes, because the quoted spread is the cost of an
+infinitesimal trade and nobody trades infinitesimally:
+
+| | median | p90 |
+|---|---|---|
+| nominal spread | 0.010 | 0.010 |
+| $50 order, slippage vs mid | 0.99pp | 1.66pp |
+| $100 order | 0.99pp | 2.04pp |
+| $250 order | 1.53pp | 2.94pp |
+| ask-side depth | ~$12,600 | — |
+
+The 0.02 placeholder was pessimistic — real spreads are ~0.01, so
+`assumed_polymarket_spread` is now **measured at 0.01**. It doesn't change
+the conclusion (§4d is negative at zero friction), but it does mean the
+friction budget is ~1pp for small orders rather than 2.5pp, and it tells you
+size matters: cost roughly doubles between $50 and $250 because you walk the
+book. Caveat: this is a small live sample (tens of snapshots over a few
+windows) — rerun it longer before leaning on the numbers.
+
 ## Corrections to earlier assumptions
 
 Four things the scaffolding plan and the first version of this harness had
@@ -353,5 +440,7 @@ scripts/build_resolutions.py        merges a live capture's odds log with bars
 scripts/collect_live.py             prospective L2 depth capture (+ live odds)
 scripts/run_backtest.py             3-way comparison, sensitivity, trade log
 scripts/analyze_calibration.py      predicted vs realized win rate, by price bucket
+scripts/fit_model.py                fits model_prob vs the market; power sweep / detection floor
+scripts/measure_execution_cost.py   real spread + size-weighted slippage from the live book
 tests/test_smoke.py                 plumbing + look-ahead + no-fake-edge self-checks
 ```
