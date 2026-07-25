@@ -20,6 +20,35 @@ Contents:
 
 ---
 
+## How to tell a leak from a real edge
+
+No statistical test separates them — a feature containing the future genuinely
+*is* correlated with the outcome, and every holdout confirms it. Two things do
+separate them, and both are cheap.
+
+**The lag test, which is decisive.** Shift every feature back one full period
+and rerun unchanged. A real signal is built from information observable before
+the decision and it persists, so lagging *degrades* the edge without erasing
+it. A leak dies completely, because there was nothing there but the answer.
+Watch the coefficient: surviving at roughly its old magnitude means real,
+collapsing to zero means leak.
+
+**The persistence fingerprint.** A leaked feature is typically serially
+uncorrelated — fresh noise each period — yet predicts its own period's outcome
+while being invisible to the market price. That combination is impossible for
+genuine information: anything a trader could actually have known would show up
+in prior periods too, and would be at least partly reflected in the price.
+Check `autocorr(feature)` alongside `corr(feature[t-1], outcome[t])`. Real
+signals score on both; leaks score on neither.
+
+This distinction is subtle enough that the example generator shipped with this
+repo originally got it wrong: it drew a signal as white noise and had the
+outcome depend on it, producing something advertised as a "genuine edge" that
+was structurally identical to a leak, and correctly flagged as one. Fixed by
+making the signal autocorrelated and having the market price part of it.
+
+---
+
 ## 1. Stale price paired with a fresh signal
 
 **Fake edge produced: enormous — 20%+ per trade.**
