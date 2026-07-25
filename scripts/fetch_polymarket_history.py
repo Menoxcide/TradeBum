@@ -58,7 +58,9 @@ import requests
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
-SLUG_PREFIX = "btc-updown-5m-"
+SLUG_PREFIX = "btc-updown-5m-"  # default; --slug-prefix overrides for other
+# market families (btc-updown-15m-, eth-updown-5m-, ...). All of them key the
+# slug on the window start in unix seconds, so the same fetcher works for each.
 
 
 def _parse_date_ms(s: str, end_of_day: bool = False) -> int:
@@ -91,20 +93,20 @@ def get_json(session: requests.Session, url: str, params=None, retries: int = 4)
     return None
 
 
-def fetch_events_batch(session, window_starts_sec: list[int]) -> dict[int, dict]:
+def fetch_events_batch(session, window_starts_sec: list[int], slug_prefix: str = SLUG_PREFIX) -> dict[int, dict]:
     """Gamma accepts repeated ?slug= params, so event lookups batch. One
     request per ~20 windows instead of one per window."""
-    params = [("slug", f"{SLUG_PREFIX}{ws}") for ws in window_starts_sec]
+    params = [("slug", f"{slug_prefix}{ws}") for ws in window_starts_sec]
     data = get_json(session, f"{GAMMA_BASE}/events", params=params)
     out = {}
     if not isinstance(data, list):
         return out
     for event in data:
         slug = event.get("slug", "")
-        if not slug.startswith(SLUG_PREFIX):
+        if not slug.startswith(slug_prefix):
             continue
         try:
-            ws = int(slug[len(SLUG_PREFIX):])
+            ws = int(slug[len(slug_prefix):])
         except ValueError:
             continue
         markets = event.get("markets") or []
@@ -189,6 +191,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=20, help="windows per Gamma request")
     ap.add_argument("--sleep", type=float, default=0.15, help="pause between requests, be polite")
     ap.add_argument("--limit", type=int, default=None, help="stop after N windows (for a quick trial)")
+    ap.add_argument("--slug-prefix", default=SLUG_PREFIX,
+                    help="market family, e.g. btc-updown-15m- or eth-updown-5m- (default 5m BTC)")
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(args.resolutions, newline="")))
@@ -216,7 +220,7 @@ def main():
 
     for i in range(0, len(starts), args.batch_size):
         batch = starts[i:i + args.batch_size]
-        markets = fetch_events_batch(session, batch)
+        markets = fetch_events_batch(session, batch, args.slug_prefix)
         time.sleep(args.sleep)
 
         for ws in batch:
