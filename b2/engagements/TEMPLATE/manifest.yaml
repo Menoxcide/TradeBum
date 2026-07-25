@@ -1,0 +1,38 @@
+client: Example Capital
+submitted: 2026-07-25
+
+claim:
+  description: "Momentum signal on 5-minute BTC up/down contracts"
+  metric: mean_pnl_per_trade
+  value: 2.10
+  n_trades: 1356
+
+data:
+  file: opps.csv
+  time_col: ts
+  outcome_col: won
+  market_prob_col: mkt_p
+  features: [momentum, volume_ratio]
+
+provenance:
+  price_source: "CLOB prices-history"
+  price_granularity_sec: 60
+  price_age_at_decision_sec: 56
+  bar_timestamp_convention: open
+  bar_interval_sec: 60
+  excludes_forming_bar: true
+  settlement_source: "Chainlink BTC/USD"
+  signal_price_source: "Binance BTCUSDT"
+
+costs:
+  measured: false
+  method: "assumed 2c spread"
+  cost_per_entry: 0.01
+  cost_p90: 0.041
+  order_size: 100
+
+search:
+  configurations_tried: 48
+  split_method: time
+  holdout_already_examined: true
+  rules_chosen_post_hoc: "entry price band 0.70-0.90"
