@@ -41,8 +41,16 @@ CONFIG = {
 
 
 def _provider(n_windows=1500, seed=42):
-    bars, obs, funding, resolutions = generate_synthetic_dataset(n_windows=n_windows, seed=seed)
-    return InMemoryProvider(bars, obs, funding, resolutions)
+    """Delegates to the cached builder in conftest so repeated (n_windows,
+    seed) pairs generate the dataset once per session instead of once per
+    test. Same data, same seeds -- only the wall-clock cost changes."""
+    try:
+        from conftest import synthetic_provider
+    except ImportError:  # running this file directly, without pytest
+        bars, obs, funding, resolutions = generate_synthetic_dataset(
+            n_windows=n_windows, seed=seed)
+        return InMemoryProvider(bars, obs, funding, resolutions)
+    return synthetic_provider(n_windows, seed)
 
 
 def test_runs_without_crashing():

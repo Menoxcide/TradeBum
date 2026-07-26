@@ -145,9 +145,79 @@ def fit_logistic(rows, features, use_offset: bool, l2: float = 1.0, iters: int =
             break
 
     if max(abs(b) for b in beta) > 1e6:
-        raise SystemExit("fit diverged (|coef| > 1e6). Check for a feature that "
-                         "perfectly separates the outcome, or a constant column.")
+        raise SystemExit(
+            "fit diverged (|coef| > 1e6). The Newton update ran away, which means "
+            "the iteration is broken rather than the data -- check the sign of the "
+            "Hessian above. For a feature that perfectly separates the outcome see "
+            "separation_check(), which catches that case; it does NOT reach this "
+            "guard, because the IRLS weight floor throttles the step long before "
+            "1e6 (perfect separation settles near |coef| ~ 22)."
+        )
     return beta
+
+
+def separation_check(rows, beta, features, use_offset):
+    """Warn when the model classifies the training data perfectly.
+
+    Perfect separation is the fingerprint of a feature that contains the
+    answer. It does not trip the divergence guard above: the weight floor
+    (w = max(p*(1-p), 1e-8)) damps each Newton step, so the coefficient
+    grows to roughly 22 over 60 iterations and stops -- large, finite, and
+    entirely plausible-looking in the coefficient table.
+
+    Accuracy is used rather than coefficient magnitude because magnitude is
+    not scale-invariant: a feature measured in units of 1e-4 legitimately
+    earns a coefficient of 1e4, so no threshold on |coef| can separate a
+    leak from a small-scale feature. Getting every single row right is
+    scale-free and, on any real market, impossible.
+    """
+    if len(rows) < 50:
+        return
+    correct = sum(
+        1 for r in rows
+        if (predict(beta, r, features, use_offset) >= 0.5) == (r["y"] == 1)
+    )
+    accuracy = correct / len(rows)
+    if accuracy < 0.99:
+        return
+
+    # Accuracy alone is not enough: it is dominated by the majority class
+    # under imbalance. On a long-shot market resolving 'no' 99.4% of the
+    # time -- ordinary for this venue, and hygiene() only warns about it --
+    # a model that always predicts the majority scores 99.4% with no leak
+    # whatsoever, and would be reported as a leak by an absolute threshold.
+    #
+    # So compare against the baseline that guessing the majority achieves,
+    # measured on errors rather than on accuracy. Errors are what a leak
+    # actually eliminates: a feature containing the answer drives them to
+    # zero regardless of the base rate, while a legitimately skewed market
+    # leaves the model making roughly the same mistakes as the baseline.
+    ones = sum(1 for r in rows if r["y"] == 1)
+    majority_share = max(ones, len(rows) - ones) / len(rows)
+    baseline_errors = 1.0 - majority_share
+    if baseline_errors <= 0:
+        return  # single-class data; hygiene() already rejects this
+    if (1.0 - accuracy) > 0.01 * baseline_errors:
+        return  # did not eliminate essentially every error the baseline makes
+
+    print("\n" + "=" * 72)
+    print("PERFECT SEPARATION -- the model gets essentially every row right")
+    print("=" * 72)
+    for line in _wrap(
+        f"Training accuracy is {accuracy:.1%} over {len(rows)} rows, against "
+        f"{majority_share:.1%} for simply guessing the majority class -- so this is "
+        f"not an artefact of a skewed base rate. No feature observable before the "
+        f"outcome achieves that on a real market. Something in the feature set is "
+        f"derived from the result it is being asked to predict -- directly, or "
+        f"through a column built downstream of it.", 70
+    ):
+        print(f"  {line}")
+    print()
+    print("  The coefficient table above will look strong rather than broken, and")
+    print("  every holdout will confirm it, because the data really does contain")
+    print("  the answer. Lag every feature by one full period and rerun: a real")
+    print("  signal degrades, a leak collapses to nothing.")
+    print("=" * 72)
 
 
 def predict(beta, row, features, use_offset: bool):
@@ -442,6 +512,8 @@ def main():
     print(f"  {'intercept':<24} {beta[0]:+.5f}")
     for name, b in zip(features, beta[1:]):
         print(f"  {name:<24} {b:+.5f}")
+
+    separation_check(train, beta, features, use_offset)
 
     ref = [(r["mkt"] if use_offset else 0.5) for r in val]
     devs = sorted(abs(predict(beta, r, features, use_offset) - m) for r, m in zip(val, ref))
