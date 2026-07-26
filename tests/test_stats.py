@@ -98,16 +98,34 @@ def test_max_drawdown_measures_from_the_running_peak():
     assert max_drawdown([1000, 1200, 900, 1100]) == pytest.approx(0.25)
 
 
-def test_max_drawdown_can_exceed_one_hundred_percent_when_equity_goes_negative():
-    """DOCUMENTS A MISLEADING OUTPUT. print_summary formats this as a
-    percentage, so a blown-up account reports '150.0%' drawdown. It is
-    arithmetically what the formula says -- (peak - x)/peak with x negative
-    -- but as a reported figure it is nonsense, and it means the number
-    cannot be compared against a drawdown limit expressed in percent.
+def test_max_drawdown_is_capped_at_one_hundred_percent():
+    """(peak - x)/peak exceeds 1 once equity goes negative, and
+    print_summary renders it as a percentage -- so a blown-up account used
+    to report a '150.0%' drawdown, which is meaningless as a fraction of
+    capital and cannot be compared against a limit expressed in percent.
 
-    Reachable in practice: engine.py halts on the DAILY loss limit, and
-    nothing stops cumulative equity going negative across days."""
-    assert max_drawdown([1000, -500]) == pytest.approx(1.5)
+    Reachable in practice: engine.py's loss limit is daily, and nothing
+    stops cumulative equity going negative across days."""
+    assert max_drawdown([1000, -500]) == 1.0
+    assert max_drawdown([1000, 0]) == 1.0
+    assert max_drawdown([1000, 500]) == pytest.approx(0.5)
+
+
+def test_a_wipe_out_is_reported_as_a_note_rather_than_hidden_by_the_cap():
+    """The capping above loses information, so summarize() has to say the
+    account was wiped out -- otherwise a 100% drawdown that ended at zero
+    would be indistinguishable from one that ended at minus half the
+    starting capital."""
+    trades = [trade(-500.0, won=False), trade(-1500.0, won=False)]
+    s = summarize(trades, [500.0, -1000.0], "blown up")
+    assert s.max_drawdown_pct == 1.0
+    assert any("wiped out" in n for n in s.notes)
+    assert any("-1,000.00" in n for n in s.notes)
+
+
+def test_no_wipe_out_note_on_a_surviving_run():
+    s = summarize([trade(-10.0, won=False)], [990.0], "fine")
+    assert not any("wiped out" in n for n in s.notes)
 
 
 # ------------------------------------------------------ per_trade_sharpe

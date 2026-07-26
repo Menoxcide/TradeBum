@@ -151,29 +151,64 @@ def test_offset_leaves_a_genuinely_unpriced_feature_visible():
     assert beta[1] > 0.8
 
 
-def test_divergence_guard_does_not_fire_on_perfect_separation():
-    """DOCUMENTS A GAP between the guard and its own error message.
+def test_perfect_separation_does_not_reach_the_divergence_guard():
+    """Why separation_check() has to exist as a separate check.
 
-    The guard aborts when any |coefficient| exceeds 1e6, and its message
-    tells the user to "check for a feature that perfectly separates the
-    outcome". Perfect separation does not actually get there: the IRLS
-    weight floor (w = max(p*(1-p), 1e-8)) throttles the Newton step, so 60
-    iterations land near 22 and even 1000 only reach ~25.
-
-    So the guard covers the sign-flipped-Hessian case it was written for
-    (which runs away to ~1e15) but not the case it advertises. Perfect
-    separation is a classic leak signature, so this is worth knowing.
-
-    The result is still caught, by the magnitude check rather than the
-    guard -- see test_perfect_separation_is_caught_by_the_magnitude_check
-    below. Pinned as current behaviour rather than changed, because
-    tightening the threshold would start aborting runs that legitimately
-    fit strong features."""
+    The guard aborts at |coefficient| > 1e6. Perfect separation never gets
+    there: the IRLS weight floor (w = max(p*(1-p), 1e-8)) throttles the
+    Newton step, so 60 iterations land near 22 and even 1000 only reach ~25
+    -- large, finite, and entirely plausible-looking in the coefficient
+    table. The guard covers the runaway-iteration case it was written for;
+    separation is caught by accuracy instead."""
     rows = [row(t, 1 if t % 2 else 0, x=1.0 if t % 2 else -1.0) for t in range(400)]
     beta = ve.fit_logistic(rows, ["x"], use_offset=False, l2=0.0)
     assert math.isfinite(beta[1])
     assert beta[1] > 10.0, "separation drives the coefficient high"
     assert abs(beta[1]) < 1e6, "...but never far enough to trip the guard"
+
+
+def test_separation_check_flags_a_feature_containing_the_answer(capsys):
+    """Perfect separation is the fingerprint of a leak. It is now called out
+    by name, at the point where the coefficient table is printed, rather
+    than left to be inferred from a suspiciously large coefficient."""
+    rows = [row(t, 1 if t % 2 else 0, x=1.0 if t % 2 else -1.0) for t in range(400)]
+    beta = ve.fit_logistic(rows, ["x"], use_offset=False)
+    ve.separation_check(rows, beta, ["x"], use_offset=False)
+    out = capsys.readouterr().out
+    assert "PERFECT SEPARATION" in out
+    assert "lag every feature" in out.lower(), "must state the decisive next test"
+
+
+def test_separation_check_is_quiet_on_an_ordinary_signal(capsys):
+    """A genuinely predictive but noisy feature must not be flagged, or the
+    warning becomes noise and gets ignored."""
+    rng = random.Random(21)
+    rows = []
+    for t in range(1500):
+        x = rng.gauss(0, 1)
+        rows.append(row(t, 1 if rng.random() < ve.sigmoid(1.0 * x) else 0, x=x))
+    beta = ve.fit_logistic(rows, ["x"], use_offset=False)
+    ve.separation_check(rows, beta, ["x"], use_offset=False)
+    assert capsys.readouterr().out == ""
+
+
+def test_separation_check_ignores_samples_too_small_to_judge(capsys):
+    """Perfect accuracy on 20 rows is unremarkable and would fire
+    constantly on exploratory slices."""
+    rows = [row(t, 1 if t % 2 else 0, x=1.0 if t % 2 else -1.0) for t in range(20)]
+    beta = ve.fit_logistic(rows, ["x"], use_offset=False)
+    ve.separation_check(rows, beta, ["x"], use_offset=False)
+    assert capsys.readouterr().out == ""
+
+
+def test_separation_check_catches_the_leaky_dataset_end_to_end(capsys):
+    """The realistic case: a feature carrying a sliver of the outcome, not a
+    perfectly copied label."""
+    rows = make_leaky(n=3000, seed=31)
+    strong_leak = [dict(r, f={**r["f"], "momentum": (3.0 if r["y"] else -3.0)}) for r in rows]
+    beta = ve.fit_logistic(strong_leak, ["momentum", "volume_ratio"], use_offset=True)
+    ve.separation_check(strong_leak, beta, ["momentum", "volume_ratio"], use_offset=True)
+    assert "PERFECT SEPARATION" in capsys.readouterr().out
 
 
 def test_perfect_separation_is_caught_by_the_magnitude_check(capsys):

@@ -44,6 +44,17 @@ def bootstrap_ci(values: list[float], stat_fn, n_resamples: int = 2000, ci: floa
 
 
 def max_drawdown(equity_curve: list[float]) -> float:
+    """Worst peak-to-trough decline, as a fraction of the peak.
+
+    Capped at 1.0. Nothing in the engine stops cumulative equity going
+    negative -- the loss limit is daily, not lifetime -- and (peak - x)/peak
+    with a negative x exceeds 1, which print_summary would render as
+    "150.0% drawdown". As a fraction of capital that is meaningless, and it
+    cannot be compared against a drawdown limit expressed in percent. The
+    fact being capped away (the account was wiped out) is not lost: summarize()
+    raises it as an explicit note, which is far more actionable than a
+    percentage above 100.
+    """
     if not equity_curve:
         return 0.0
     peak = equity_curve[0]
@@ -51,7 +62,7 @@ def max_drawdown(equity_curve: list[float]) -> float:
     for x in equity_curve:
         peak = max(peak, x)
         if peak > 0:
-            worst = max(worst, (peak - x) / peak)
+            worst = max(worst, min(1.0, (peak - x) / peak))
     return worst
 
 
@@ -101,6 +112,15 @@ def summarize(trades: list[dict], equity_curve: list[float], strategy: str) -> S
     # reflects edge -- see fair_value.py and README.md.
     if mean_ci[0] < 0 < mean_ci[1]:
         notes.append("mean-pnl-per-trade 95% CI includes 0 -- edge is not yet statistically distinguishable from zero")
+    # max_drawdown is capped at 100%, so a wipe-out has to be reported
+    # separately or it would be indistinguishable from losing exactly the
+    # whole account. The daily loss limit does not prevent this: it halts
+    # trading for the rest of a day and resets the next morning.
+    if equity_curve and min(equity_curve) <= 0:
+        notes.append(
+            f"equity reached ${min(equity_curve):,.2f} -- the account was wiped out mid-run; "
+            f"every trade after that point is fictional and the drawdown figure is capped at 100%"
+        )
 
     return Summary(
         strategy=strategy, n_trades=n, wins=wins, win_rate=win_rate, win_rate_ci=w_ci,

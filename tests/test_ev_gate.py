@@ -93,24 +93,64 @@ def test_fees_reduce_ev():
     assert charged < free
 
 
-def test_reported_ev_excludes_spread_and_slippage():
-    """DOCUMENTS A DISCREPANCY -- read before trusting the `ev` field.
+def test_reported_ev_is_net_of_spread_and_slippage():
+    """The `ev` field is what engine.py logs on every trade, so it has to be
+    the expected value of actually doing the trade -- after the costs the
+    screen just charged against. A 10pp edge against a 2pp spread and a
+    0.5pp slippage buffer is worth 7.5pp, not 10."""
+    _, net = should_trade(0.50, 0.60, spread=0.02, fees=0.0, slippage_buffer=0.005)
+    _, frictionless = should_trade(0.50, 0.60, spread=0.0, fees=0.0, slippage_buffer=0.0)
+    assert frictionless == pytest.approx(0.10)
+    assert net == pytest.approx(0.075)
+    assert net == pytest.approx(frictionless - 0.025)
 
-    should_trade() screens on edge > spread + fees + slippage, but the EV it
-    returns subtracts `fees` only. engine.py stores that number on the trade
-    record as "ev", so the logged expected value is overstated by the spread
-    and slippage the screen just charged against.
 
-    Below: 10pp of edge against 2.5pp of friction reports ev=0.10, the same
-    value it would report with zero spread and zero slippage. This test
-    pins current behaviour rather than changing it, because subtracting
-    friction here would change which trades fire and by how much -- a
-    strategy change that needs its own validation run, not a drive-by edit.
-    """
-    _, with_friction = should_trade(0.50, 0.60, spread=0.02, fees=0.0, slippage_buffer=0.005)
-    _, without_friction = should_trade(0.50, 0.60, spread=0.0, fees=0.0, slippage_buffer=0.0)
-    assert with_friction == pytest.approx(without_friction)
-    assert with_friction == pytest.approx(0.10)
+def test_ev_reduces_to_edge_minus_cost_when_there_are_no_fees():
+    """Without fees the gross expectation of a binary contract is exactly
+    the edge, so the net figure reads directly as 'edge minus what it costs
+    to capture it' -- the quantity PLAN.md says is the binding constraint."""
+    for market, model in ((0.30, 0.45), (0.50, 0.62), (0.80, 0.95)):
+        _, ev = should_trade(market, model, spread=0.02, fees=0.0, slippage_buffer=0.005)
+        assert ev == pytest.approx((model - market) - 0.025)
+
+
+def test_spread_and_slippage_are_charged_once_each():
+    base = dict(market_prob=0.50, model_prob=0.70, fees=0.0)
+    _, none = should_trade(**base, spread=0.0, slippage_buffer=0.0)
+    _, spread_only = should_trade(**base, spread=0.03, slippage_buffer=0.0)
+    _, slip_only = should_trade(**base, spread=0.0, slippage_buffer=0.03)
+    _, both = should_trade(**base, spread=0.03, slippage_buffer=0.03)
+    assert spread_only == pytest.approx(none - 0.03)
+    assert slip_only == pytest.approx(none - 0.03)
+    assert both == pytest.approx(none - 0.06)
+
+
+def test_charging_friction_only_ever_removes_zero_expectation_trades():
+    """Bounds the blast radius of netting friction out of the EV.
+
+    The friction screen (edge > spread + fees + slippage) is strictly
+    stronger than the net-EV test, because the EV charges fees only on the
+    side that wins -- fees * p_win rather than fees. So any trade clearing
+    the screen has net EV >= 0, and the only decisions the netting can
+    change are the ones sitting at exactly zero: bets with no expectation
+    at all, which are pure variance and correctly declined.
+
+    Swept over ~350k parameter combinations when this change was made; 24
+    decisions moved, every one of them at net EV 0.000000."""
+    for market in (i / 50 for i in range(1, 50)):
+        for model in (i / 50 for i in range(1, 50)):
+            for spread in (0.0, 0.005, 0.02, 0.05):
+                for fees in (0.0, 0.01, 0.02):
+                    for slippage in (0.0, 0.005, 0.02):
+                        passed_screen = abs(model - market) > spread + fees + slippage
+                        ok, ev = should_trade(market, model, spread, fees, slippage)
+                        if passed_screen:
+                            assert ev >= -1e-12, (
+                                f"screen passed but net EV is negative: mkt={market} "
+                                f"model={model} spread={spread} fees={fees} slip={slippage} ev={ev}"
+                            )
+                        else:
+                            assert (ok, ev) == (False, 0.0)
 
 
 def test_gate_can_pass_on_the_side_opposite_the_candidate():
@@ -137,18 +177,24 @@ def test_score_to_prob_is_monotonic():
     assert probs == sorted(probs)
 
 
-def test_score_to_prob_does_not_clamp_out_of_range_input():
-    """DOCUMENTS AN UNGUARDED EDGE. The mapping is linear and unclamped, so
-    a composite outside 0-100 becomes a probability outside 0-1, which
-    should_trade() then accepts without complaint.
+def test_score_to_prob_clamps_out_of_range_input():
+    """The mapping is linear and unbounded, so without the clamp a composite
+    outside 0-100 becomes an impossible probability that should_trade()
+    would price without complaint (composite 1000 -> 7.15 -> an EV above 1.0
+    per unit staked, i.e. a position size).
 
-    ConfluenceScorer currently cannot emit such a score -- every module is
-    contract-tested to return 0-100 in test_signal_modules.py, and the
-    composite is a weighted mean of those. So this is guarded by that
-    invariant rather than by anything here. If a future module breaks the
-    contract, THIS is where the nonsense becomes a position size."""
-    assert confluence_score_to_model_prob(1000.0) > 1.0
-    assert confluence_score_to_model_prob(-1000.0) < 0.0
-    ok, ev = should_trade(market_prob=0.5, model_prob=5.0,
-                          spread=0.0, fees=0.0, slippage_buffer=0.0)
-    assert ok and ev > 1.0, "an impossible probability produces an impossible EV"
+    ConfluenceScorer cannot currently emit such a score -- every filter is
+    contract-tested to return 0-100 and the composite is their weighted mean
+    -- so this is defence in depth, behaviour-neutral for every reachable
+    input, guarding against a future module breaking that contract."""
+    assert confluence_score_to_model_prob(1000.0) == 1.0
+    assert confluence_score_to_model_prob(-1000.0) == 0.0
+    assert confluence_score_to_model_prob(float("inf")) == 1.0
+
+
+def test_score_to_prob_is_unchanged_across_the_whole_valid_range():
+    """The clamp must not perturb any score the scorer can actually
+    produce."""
+    for score in range(0, 101):
+        expected = 0.5 + 0.35 * ((score - 50.0) / 50.0)
+        assert confluence_score_to_model_prob(score) == pytest.approx(expected)
