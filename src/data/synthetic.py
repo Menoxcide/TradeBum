@@ -5,8 +5,15 @@ This produces a random walk with no injected predictability. It exists so
 you can run the full pipeline end-to-end today and confirm nothing crashes,
 and so the harness has a built-in self-check: because this data has no real
 edge in it by construction, a correctly-built backtester should report a
-win rate whose confidence interval straddles 50% and an EV that is not
-distinguishable from zero.
+mean P&L per trade whose confidence interval is not distinguishable from
+zero.
+
+Note that WIN RATE is not the metric to check, despite being the obvious
+one. This generator prices each window at fair value (see fair_value.py),
+so a strategy that only enters already-likely-to-win setups will show a win
+rate well above 50% with exactly zero edge -- it pays proportionally more
+for those setups. A win-rate interval straddling 50% is neither expected
+nor required here; see tests/test_no_free_money.py.
 
 If a run on THIS synthetic data ever shows a strong, confident edge, that
 is a bug in the harness (most likely look-ahead bias), not a discovery.

@@ -325,6 +325,10 @@ def test_every_window_is_either_traded_or_accounted_for(strategy):
 def test_equity_curve_tracks_cumulative_pnl(strategy):
     r = run([STRONG_UP, dict(STRONG_UP, close_delta=-300.0)] * 6,
             strategy=strategy, max_trades_per_day=99, **PERMISSIVE)
+    assert len(r.trades) == len(r.equity_curve), (
+        "one equity point per trade -- asserted before zipping, which would "
+        "otherwise truncate to the shorter list and pass vacuously"
+    )
     running = BASE_CONFIG["total_allocation_usdc"]
     for t, equity in zip(r.trades, r.equity_curve):
         running += t["pnl_usdc"]

@@ -70,23 +70,48 @@ class DataProvider:
         rows.sort(key=lambda b: b.timestamp_ms)
         return rows
 
+    @staticmethod
+    def _parse_float_list(s: str) -> list[float]:
+        return [float(x) for x in s.split(";") if x.strip() != ""]
+
     def _load_orderbook(self) -> list[OrderBookSnapshot]:
         path = self.data_dir / "orderbook.csv"
         if not path.exists():
             return []
         rows = []
         with open(path, newline="") as f:
-            for row in csv.DictReader(f):
-                def parse_list(s: str) -> list[float]:
-                    return [float(x) for x in s.split(";") if x.strip() != ""]
+            for line_no, row in enumerate(csv.DictReader(f), start=2):
+                bid_prices = self._parse_float_list(row.get("bid_prices", ""))
+                bid_sizes = self._parse_float_list(row.get("bid_sizes", ""))
+                ask_prices = self._parse_float_list(row.get("ask_prices", ""))
+                ask_sizes = self._parse_float_list(row.get("ask_sizes", ""))
+
+                # Prices and sizes are parsed from independent columns, so a
+                # dropped or duplicated value leaves them mismatched. Caught
+                # here, at the row that is actually wrong, rather than in
+                # top_n_notional -- which pairs them with zip() and would
+                # silently drop the trailing level, yielding a smaller but
+                # entirely plausible-looking notional. Depth feeds the
+                # book_too_thin gate and the imbalance signal's confidence,
+                # so a quietly wrong depth changes which trades fire.
+                for side, prices, sizes in (
+                    ("bid", bid_prices, bid_sizes),
+                    ("ask", ask_prices, ask_sizes),
+                ):
+                    if len(prices) != len(sizes):
+                        raise ValueError(
+                            f"{path}, line {line_no}: {side} has {len(prices)} price(s) "
+                            f"but {len(sizes)} size(s). Every price needs its own size; "
+                            f"a mismatch here silently understates book depth."
+                        )
 
                 rows.append(
                     OrderBookSnapshot(
                         timestamp_ms=int(row["timestamp_ms"]),
-                        bid_prices=parse_list(row.get("bid_prices", "")),
-                        bid_sizes=parse_list(row.get("bid_sizes", "")),
-                        ask_prices=parse_list(row.get("ask_prices", "")),
-                        ask_sizes=parse_list(row.get("ask_sizes", "")),
+                        bid_prices=bid_prices,
+                        bid_sizes=bid_sizes,
+                        ask_prices=ask_prices,
+                        ask_sizes=ask_sizes,
                     )
                 )
         rows.sort(key=lambda o: o.timestamp_ms)

@@ -97,6 +97,46 @@ def test_orderbook_levels_parse_from_semicolon_lists(data_dir):
     assert book.spread == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("bad_row, side", [
+    (("100;99;98", "1;2", "101;102;103", "4;5;6"), "bid"),
+    (("100;99;98", "1;2;3", "101;102", "4;5;6"), "ask"),
+    (("100;99", "1;2;3", "101;102;103", "4;5;6"), "bid"),
+])
+def test_mismatched_book_levels_are_rejected_at_load(data_dir, bad_row, side):
+    """Prices and sizes come from independent columns, so a dropped value
+    leaves them mismatched. top_n_notional pairs them with zip(), which
+    would silently drop the trailing level and return a smaller but
+    plausible-looking depth -- and depth drives the book_too_thin gate and
+    the imbalance signal's confidence, so a quietly wrong number changes
+    which trades fire. Caught at the offending row instead."""
+    write_csv(data_dir / "orderbook.csv",
+              "timestamp_ms,bid_prices,bid_sizes,ask_prices,ask_sizes",
+              [(0,) + bad_row])
+    with pytest.raises(ValueError, match=f"line 2: {side}"):
+        DataProvider(data_dir)
+
+
+def test_a_book_with_no_levels_at_all_is_accepted(data_dir):
+    """Empty is not mismatched -- a snapshot with no depth is legitimate,
+    and the imbalance filter reports zero confidence for it."""
+    write_csv(data_dir / "orderbook.csv",
+              "timestamp_ms,bid_prices,bid_sizes,ask_prices,ask_sizes",
+              [(0, "", "", "", "")])
+    p = DataProvider(data_dir)
+    assert p.orderbook_snapshots[0].top_n_notional(3) == (0.0, 0.0)
+
+
+def test_asymmetric_but_internally_consistent_book_is_accepted(data_dir):
+    """Bids and asks may legitimately have different depths; only each
+    side's own price/size pairing has to line up."""
+    write_csv(data_dir / "orderbook.csv",
+              "timestamp_ms,bid_prices,bid_sizes,ask_prices,ask_sizes",
+              [(0, "100;99", "1;2", "101;102;103", "4;5;6")])
+    bid, ask = DataProvider(data_dir).orderbook_snapshots[0].top_n_notional(3)
+    assert bid == pytest.approx(100 * 1 + 99 * 2)
+    assert ask == pytest.approx(101 * 4 + 102 * 5 + 103 * 6)
+
+
 def test_blank_market_prob_becomes_none_not_zero(data_dir):
     """A blank parsed as 0.0 would mean 'the market is certain this resolves
     DOWN', which is a very different claim from 'we have no price'."""

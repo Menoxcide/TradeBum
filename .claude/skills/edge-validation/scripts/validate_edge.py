@@ -181,14 +181,35 @@ def separation_check(rows, beta, features, use_offset):
     if accuracy < 0.99:
         return
 
+    # Accuracy alone is not enough: it is dominated by the majority class
+    # under imbalance. On a long-shot market resolving 'no' 99.4% of the
+    # time -- ordinary for this venue, and hygiene() only warns about it --
+    # a model that always predicts the majority scores 99.4% with no leak
+    # whatsoever, and would be reported as a leak by an absolute threshold.
+    #
+    # So compare against the baseline that guessing the majority achieves,
+    # measured on errors rather than on accuracy. Errors are what a leak
+    # actually eliminates: a feature containing the answer drives them to
+    # zero regardless of the base rate, while a legitimately skewed market
+    # leaves the model making roughly the same mistakes as the baseline.
+    ones = sum(1 for r in rows if r["y"] == 1)
+    majority_share = max(ones, len(rows) - ones) / len(rows)
+    baseline_errors = 1.0 - majority_share
+    if baseline_errors <= 0:
+        return  # single-class data; hygiene() already rejects this
+    if (1.0 - accuracy) > 0.01 * baseline_errors:
+        return  # did not eliminate essentially every error the baseline makes
+
     print("\n" + "=" * 72)
     print("PERFECT SEPARATION -- the model gets essentially every row right")
     print("=" * 72)
     for line in _wrap(
-        f"Training accuracy is {accuracy:.1%} over {len(rows)} rows. No feature "
-        f"observable before the outcome achieves that on a real market. Something "
-        f"in the feature set is derived from the result it is being asked to "
-        f"predict -- directly, or through a column built downstream of it.", 70
+        f"Training accuracy is {accuracy:.1%} over {len(rows)} rows, against "
+        f"{majority_share:.1%} for simply guessing the majority class -- so this is "
+        f"not an artefact of a skewed base rate. No feature observable before the "
+        f"outcome achieves that on a real market. Something in the feature set is "
+        f"derived from the result it is being asked to predict -- directly, or "
+        f"through a column built downstream of it.", 70
     ):
         print(f"  {line}")
     print()

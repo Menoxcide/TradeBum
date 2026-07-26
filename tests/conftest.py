@@ -73,13 +73,12 @@ def synthetic_provider(n_windows: int = 1500, seed: int = 42) -> InMemoryProvide
     if key not in _synthetic_cache:
         _synthetic_cache[key] = generate_synthetic_dataset(n_windows=n_windows, seed=seed)
     bars, obs, funding, resolutions = _synthetic_cache[key]
-    return InMemoryProvider(bars, obs, funding, resolutions)
-
-
-@pytest.fixture(scope="session")
-def small_synthetic():
-    bars, obs, funding, resolutions = generate_synthetic_dataset(n_windows=200, seed=42)
-    return InMemoryProvider(bars, obs, funding, resolutions)
+    # Hand out fresh list objects. The dataclasses inside are shared, but the
+    # lists are not: a test that appends a window (test_engine_gates does
+    # exactly that to reach `insufficient_bar_history`) would otherwise
+    # mutate the cache and corrupt every later test using the same seed --
+    # the cross-test leakage the `config` fixture is copied to avoid.
+    return InMemoryProvider(list(bars), list(obs), list(funding), list(resolutions))
 
 
 # -------------------------------------------------------- hand-built data

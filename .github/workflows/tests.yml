@@ -15,6 +15,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No step here pushes, and the job installs and executes
+          # third-party packages -- a persisted token would be reachable
+          # from any compromised dependency.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:

@@ -192,6 +192,44 @@ def test_separation_check_is_quiet_on_an_ordinary_signal(capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_separation_check_is_quiet_on_a_legitimate_long_shot_market(capsys):
+    """Regression: accuracy alone is dominated by the majority class.
+
+    On a market resolving the same way 99.4% of the time -- ordinary for
+    long-shot prediction markets, and hygiene() only warns about imbalance,
+    never rejects it -- a model that mostly predicts the majority scores
+    99.4% with no leak at all. An absolute 0.99 threshold flagged exactly
+    that as PERFECT SEPARATION, so the check compared against the baseline
+    a majority-class guess achieves."""
+    rng = random.Random(3)
+    rows = []
+    for t in range(2000):
+        x = rng.gauss(0, 1)
+        p = min(0.999, max(0.001, 0.99 + 0.005 * x))
+        rows.append(row(t, 1 if rng.random() < p else 0, mkt=p, x=x))
+
+    ones = sum(r["y"] for r in rows)
+    assert max(ones, len(rows) - ones) / len(rows) > 0.98, "fixture must be skewed"
+
+    beta = ve.fit_logistic(rows, ["x"], use_offset=True)
+    ve.separation_check(rows, beta, ["x"], use_offset=True)
+    assert capsys.readouterr().out == "", "flagged a skewed but honest market as a leak"
+
+
+def test_separation_check_still_fires_on_a_leak_in_a_skewed_market(capsys):
+    """The complement: skew must not become a blanket exemption. A genuine
+    leak drives errors to zero regardless of the base rate."""
+    rng = random.Random(4)
+    rows = []
+    for t in range(2000):
+        p = min(0.999, max(0.001, rng.gauss(0.97, 0.02)))
+        y = 1 if rng.random() < p else 0
+        rows.append(row(t, y, mkt=p, x=(5.0 if y else -5.0)))
+    beta = ve.fit_logistic(rows, ["x"], use_offset=True)
+    ve.separation_check(rows, beta, ["x"], use_offset=True)
+    assert "PERFECT SEPARATION" in capsys.readouterr().out
+
+
 def test_separation_check_ignores_samples_too_small_to_judge(capsys):
     """Perfect accuracy on 20 rows is unremarkable and would fire
     constantly on exploratory slices."""
