@@ -3,12 +3,18 @@ __pycache__/
 .venv/
 venv/
 
+# test + coverage artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 # real market data + run outputs: reproducible via scripts/, too big to track
-data/
+/data/
 report*.json
 
 # client submissions and deliverables -- never commit these
 b2/engagements/*
 !b2/engagements/TEMPLATE/
-data/okx/
-trackA/datasets/
+/data/okx/
+/trackA/datasets/

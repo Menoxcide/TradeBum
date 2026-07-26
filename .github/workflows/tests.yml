@@ -1,0 +1,48 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # The suite is unrunnable if src/data/ is missing -- which is exactly
+      # how it was broken before: an unanchored `data/` rule in .gitignore
+      # matched src/data/ at any depth, so the package was never committed
+      # and every import failed from a clean clone. Checking imports first
+      # makes that failure mode obvious instead of surfacing as a wall of
+      # collection errors.
+      - name: Check the package imports from a clean checkout
+        run: |
+          python -c "import src.backtest.engine, src.data.provider, src.data.synthetic"
+
+      - name: Verify no source package is gitignored
+        run: |
+          if git check-ignore -q src/data; then
+            echo "::error::src/data is gitignored -- check the 'data/' rule is anchored as '/data/'"
+            exit 1
+          fi
+
+      - name: Run tests with coverage
+        run: |
+          pytest --cov=src --cov-report=term-missing --cov-report=xml

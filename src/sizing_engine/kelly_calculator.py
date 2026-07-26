@@ -14,11 +14,20 @@ from __future__ import annotations
 
 
 class KellyVolatilitySizer:
-    def __init__(self, profile: dict, min_trades_for_kelly: int = 50, fallback_pct: float = 0.01):
+    def __init__(self, profile: dict, min_trades_for_kelly: int = 50, fallback_pct: float | None = None):
         self.allocation = profile["total_allocation_usdc"]
         self.max_pct = profile["max_position_pct"]
         self.kelly_frac = profile["kelly_fraction"]
         self.min_trades_for_kelly = min_trades_for_kelly
+        # Read from the profile when not passed explicitly. Previously this
+        # was an argument-only default, and engine.py constructs the sizer
+        # without passing it -- so `fallback_pct` in the config was silently
+        # ignored and every run used 0.01 regardless. It went unnoticed
+        # because all three shipped profiles happen to set 0.01, which is
+        # also the default; the bug only surfaces the first time someone
+        # tunes it. An explicit argument still wins, for tests.
+        if fallback_pct is None:
+            fallback_pct = profile.get("fallback_pct", 0.01)
         self.fallback_pct = fallback_pct
 
     def calculate(
