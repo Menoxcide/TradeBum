@@ -36,7 +36,7 @@ see "Methodological rules" below.
 Git matches it at any depth, so it also matches `src/data/` — and that package
 was never committed to the default branch.
 
-```
+```console
 $ python3 -c "import src.backtest.engine"
 ModuleNotFoundError: No module named 'src.data'
 ```
@@ -55,7 +55,7 @@ git checkout origin/claude/test-coverage-analysis-18j6sk -- src/data .gitignore
 
 ## Layout
 
-```
+```text
 src/data/            schema (Bar, OrderBookSnapshot, ResolvedWindow, MarketState),
                      DataProvider (CSV, look-ahead-safe), synthetic generator
                      -- ABSENT on the default branch, see above
@@ -77,8 +77,9 @@ trackA/              OKX perp hypothesis tests: pre-registration and results
 
 `src/` is a plain package rooted at the repo — imports are absolute
 (`from src.data.schema import MarketState`) and scripts do
-`sys.path.insert(0, <repo root>)` at the top. There is no `setup.py`, no
-`pyproject.toml`, and no install step.
+`sys.path.insert(0, <repo root>)` at the top. There is no `setup.py` and no
+`pyproject.toml` — the repo itself is never installed as a package, so
+`pip install -r requirements.txt` covers dependencies and nothing else.
 
 ### The pipeline
 
